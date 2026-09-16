@@ -81,41 +81,22 @@ export default function App() {
   const [isPointerBlocked, setIsPointerBlocked] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
-  // Canvas & Active Inking Strokes Map (Enables seamless writing even with hands resting)
+  // References for pure canvas inking
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasWrapperRef = useRef<HTMLDivElement | null>(null);
+  const strokesRef = useRef<Stroke[]>([]);
   const activeStrokesMapRef = useRef<Map<number, Stroke>>(new Map());
   const ignoredPointerIdsRef = useRef<Set<number>>(new Set());
+
+  // Keep strokesRef in sync with state
+  useEffect(() => {
+    strokesRef.current = strokes;
+  }, [strokes]);
 
   // Drawer Dragging Refs
   const isDraggingDrawerRef = useRef<boolean>(false);
   const dragStartYRef = useRef<number>(0);
   const dragStartHeightRef = useRef<number>(260);
-
-  // --- Global pointer cleanup to guarantee no stuck pointers ---
-  useEffect(() => {
-    const handleGlobalPointerUp = (e: PointerEvent) => {
-      ignoredPointerIdsRef.current.delete(e.pointerId);
-      if (activeStrokesMapRef.current.has(e.pointerId)) {
-        const finished = activeStrokesMapRef.current.get(e.pointerId)!;
-        setStrokes((prev) => [...prev, finished]);
-        setRedoStack([]);
-        activeStrokesMapRef.current.delete(e.pointerId);
-        renderCanvas();
-      }
-      if (ignoredPointerIdsRef.current.size === 0) {
-        setIsPalmTouching(false);
-      }
-    };
-
-    window.addEventListener('pointerup', handleGlobalPointerUp);
-    window.addEventListener('pointercancel', handleGlobalPointerUp);
-
-    return () => {
-      window.removeEventListener('pointerup', handleGlobalPointerUp);
-      window.removeEventListener('pointercancel', handleGlobalPointerUp);
-    };
-  }, []);
 
   // --- Helper: Redraw All Canvas Strokes & Background Grid ---
   const renderCanvas = useCallback(() => {
@@ -172,9 +153,9 @@ export default function App() {
       }
     }
 
-    // 4. Render All Completed Strokes + All Active In-Flight Strokes
+    // 4. Render All Completed Strokes + In-Flight Active Strokes
     const inFlightStrokes = Array.from(activeStrokesMapRef.current.values());
-    const allStrokes = [...strokes, ...inFlightStrokes];
+    const allStrokes = [...strokesRef.current, ...inFlightStrokes];
 
     for (const stroke of allStrokes) {
       if (stroke.points.length === 0) continue;
@@ -217,7 +198,7 @@ export default function App() {
 
       ctx.restore();
     }
-  }, [strokes, paperStyle]);
+  }, [paperStyle]);
 
   // --- Resize Canvas on Window Resize & High DPI Scaling ---
   const handleResize = useCallback(() => {
@@ -249,7 +230,7 @@ export default function App() {
 
   useEffect(() => {
     renderCanvas();
-  }, [renderCanvas]);
+  }, [renderCanvas, strokes]);
 
   // --- Pointer Coordinates Normalizer ---
   const getCanvasCoords = (e: React.PointerEvent<HTMLCanvasElement>): Point => {
@@ -263,7 +244,7 @@ export default function App() {
     };
   };
 
-  // --- Check if pointer falls inside Palm Rest Zone ---
+  // --- Check if pointer is inside Palm Rest Zone ---
   const isInsidePalmZone = (clientY: number) => {
     if (!showPalmShield || !canvasWrapperRef.current) return false;
     const rect = canvasWrapperRef.current.getBoundingClientRect();
@@ -271,13 +252,13 @@ export default function App() {
     return clientY >= palmThresholdY;
   };
 
-  // --- Pointer Down (Start Inking with Complete Palm Isolation) ---
+  // --- Pointer Down (Start Inking on Single Surface) ---
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // 1. If touch lands inside the Palm Rest Zone -> ABSORB as Palm (Zero drawing)
+    // 1. If pointer is inside the bottom Palm Rest Zone -> ABSORB as Palm (Zero drawing)
     if (isInsidePalmZone(e.clientY)) {
       ignoredPointerIdsRef.current.add(e.pointerId);
       setIsPalmTouching(true);
-      setPointerStatus('✋ Hand resting in Palm Guard Zone • Safe to write above');
+      setPointerStatus('✋ Hand resting in Palm Guard Zone • Writing active above');
       return;
     }
 
@@ -289,21 +270,13 @@ export default function App() {
       return;
     }
 
-    // 3. Hardware Pen Priority: If a pen touches down, clear any accidental touch strokes
+    // 3. Hardware Pen Priority: clear any accidental touch strokes
     if (e.pointerType === 'pen') {
-      // Remove any touch strokes currently in-flight so pen has exclusive priority
       for (const [id] of activeStrokesMapRef.current.entries()) {
         if (id !== e.pointerId) {
           activeStrokesMapRef.current.delete(id);
         }
       }
-    }
-
-    // 4. Start Inking on the Canvas
-    try {
-      (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {
-      // ignore
     }
 
     setIsPointerBlocked(false);
@@ -360,12 +333,6 @@ export default function App() {
 
   // --- Pointer Up / End ---
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-
     // If it's an ignored palm pointer releasing
     if (ignoredPointerIdsRef.current.has(e.pointerId)) {
       ignoredPointerIdsRef.current.delete(e.pointerId);
@@ -385,7 +352,7 @@ export default function App() {
 
       setPointerStatus(
         palmMode === 'smart'
-          ? 'Ready • Smart Palm Guard Active'
+          ? 'Ready • Palm Guard Active'
           : palmMode === 'stylus'
           ? 'Ready • Stylus Only Mode'
           : 'Ready • Palm Guard Off'
@@ -694,6 +661,7 @@ export default function App() {
 
       {/* --- Canvas Drawing Area --- */}
       <main className="canvas-wrapper" ref={canvasWrapperRef}>
+        {/* The one and only touch/drawing canvas */}
         <canvas
           ref={canvasRef}
           className="drawing-canvas"
@@ -704,28 +672,11 @@ export default function App() {
           onPointerLeave={handlePointerUp}
         />
 
-        {/* --- Pull-Up Palm Rest Guard Drawer --- */}
+        {/* --- Palm Rest Guard Drawer Overlay --- */}
         {showPalmShield && (
           <div
             className={`palm-rest-drawer ${isPalmTouching ? 'touching' : ''} ${isDrawerDragging ? 'dragging' : ''}`}
             style={{ height: `${palmShieldHeight}px` }}
-            onPointerDown={(e) => {
-              ignoredPointerIdsRef.current.add(e.pointerId);
-              setIsPalmTouching(true);
-              setPointerStatus('✋ Hand resting in Palm Guard Zone • Ready to write above');
-            }}
-            onPointerUp={(e) => {
-              ignoredPointerIdsRef.current.delete(e.pointerId);
-              if (ignoredPointerIdsRef.current.size === 0) {
-                setIsPalmTouching(false);
-              }
-            }}
-            onPointerCancel={(e) => {
-              ignoredPointerIdsRef.current.delete(e.pointerId);
-              if (ignoredPointerIdsRef.current.size === 0) {
-                setIsPalmTouching(false);
-              }
-            }}
           >
             {/* Top Drawer Pull Tab & Grip Handle */}
             <div
@@ -799,7 +750,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Resting Hand Surface (Absorbs Large Palm Contact) */}
+            {/* Resting Hand Surface (Pass-through to canvas palm filter) */}
             <div className="drawer-surface-pattern">
               <div className="pattern-grid" />
               <div className="pattern-text">

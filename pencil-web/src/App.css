@@ -485,6 +485,7 @@ input:checked + .slider:before {
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
+  pointer-events: none;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -496,6 +497,19 @@ input:checked + .slider:before {
 .palm-rest-drawer.touching {
   border-top: 2px solid #10b981;
   box-shadow: 0 -10px 40px rgba(16, 185, 129, 0.35);
+}
+
+/* Pull Tab & Controls are interactive, surface passes through to canvas */
+.drawer-pull-tab,
+.drawer-header-toolbar,
+.drawer-preset-btn,
+.drawer-action-btn,
+.drawer-height-slider {
+  pointer-events: auto !important;
+}
+
+.drawer-surface-pattern {
+  pointer-events: none !important;
 }
 
 /* Pull Tab Handle on Top of Drawer */
