@@ -177,9 +177,41 @@
   align-items: center;
   gap: 12px;
   background: var(--bg-surface);
-  padding: 6px 14px;
+  padding: 4px 12px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border-color);
+}
+
+.palm-mode-dropdown-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.palm-mode-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.palm-mode-select {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.palm-mode-select:focus {
+  border-color: var(--accent-primary);
 }
 
 .toggle-item {
@@ -333,7 +365,12 @@ input:checked + .slider:before {
 }
 
 .status-dot.blocked {
-  background-color: #f59e0b;
+  background-color: #ef4444;
+}
+
+.status-dot.palm-active {
+  background-color: #3b82f6;
+  box-shadow: 0 0 8px #3b82f6;
 }
 
 .status-text {
@@ -349,6 +386,8 @@ input:checked + .slider:before {
   width: 100%;
   height: 100%;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .drawing-canvas {
@@ -367,15 +406,47 @@ input:checked + .slider:before {
   bottom: 0;
   left: 0;
   right: 0;
-  background: rgba(15, 23, 42, 0.88);
-  backdrop-filter: blur(8px);
-  border-top: 2px solid rgba(148, 163, 184, 0.4);
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 2px solid rgba(59, 130, 246, 0.5);
   display: flex;
   flex-direction: column;
   align-items: center;
   z-index: 30;
   touch-action: none;
-  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 -6px 25px rgba(0, 0, 0, 0.5);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.palm-rest-shield.touching {
+  border-top: 2px solid #10b981;
+  box-shadow: 0 -6px 30px rgba(16, 185, 129, 0.3);
+}
+
+/* Resizer Grip Handle on Top of Shield */
+.shield-resizer {
+  width: 100%;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none;
+  padding: 4px 0;
+}
+
+.shield-resizer:hover .shield-drag-bar {
+  background: #3b82f6;
+  width: 72px;
+}
+
+.shield-drag-bar {
+  width: 56px;
+  height: 5px;
+  border-radius: 3px;
+  background: #64748b;
+  transition: all 0.2s ease;
 }
 
 .shield-header {
@@ -383,15 +454,8 @@ input:checked + .slider:before {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px 16px;
-  gap: 6px;
-}
-
-.shield-drag-bar {
-  width: 48px;
-  height: 4px;
-  border-radius: 2px;
-  background: #64748b;
+  padding: 2px 16px 8px;
+  gap: 4px;
 }
 
 .shield-title-row {
@@ -399,7 +463,8 @@ input:checked + .slider:before {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  max-width: 600px;
+  max-width: 800px;
+  gap: 12px;
 }
 
 .shield-title {
@@ -410,6 +475,13 @@ input:checked + .slider:before {
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+}
+
+.shield-desc {
+  font-size: 11px;
+  color: #64748b;
+  font-style: italic;
 }
 
 .shield-controls {
@@ -432,9 +504,33 @@ input:checked + .slider:before {
   background: #334155;
 }
 
+.shield-surface-pattern {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  border-top: 1px dashed rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+.pattern-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.25);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.palm-rest-shield.touching .pattern-text {
+  color: #10b981;
+  font-weight: 700;
+}
+
 /* Responsive queries */
 @media (max-width: 900px) {
-  .brand-subtitle {
+  .brand-subtitle, .shield-desc {
     display: none;
   }
   .tool-btn span {
@@ -442,5 +538,8 @@ input:checked + .slider:before {
   }
   .tool-btn {
     padding: 8px 10px;
+  }
+  .palm-mode-label span {
+    display: none;
   }
 }
