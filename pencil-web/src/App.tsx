@@ -66,7 +66,7 @@ export default function App() {
   const [palmMode, setPalmMode] = useState<PalmRejectionMode>('smart');
   const [showPalmShield, setShowPalmShield] = useState<boolean>(true);
   const [palmShieldHeight, setPalmShieldHeight] = useState<number>(240);
-  const [isShieldLocked, setIsShieldLocked] = useState<boolean>(true);
+  const [isShieldLocked, setIsShieldLocked] = useState<boolean>(false);
   const [isPalmTouching, setIsPalmTouching] = useState<boolean>(false);
   const [pointerStatus, setPointerStatus] = useState<string>('Ready • Smart Palm Guard Active');
   const [isPointerBlocked, setIsPointerBlocked] = useState<boolean>(false);
