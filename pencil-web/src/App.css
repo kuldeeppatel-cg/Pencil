@@ -467,156 +467,199 @@ input:checked + .slider:before {
   touch-action: none;
 }
 
-/* --- Floating Palm Rest Shield --- */
-.palm-rest-shield {
+/* --- Pull-Up Palm Rest Guard Drawer --- */
+.palm-rest-drawer {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  background: rgba(15, 23, 42, 0.94);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-top: 2px solid rgba(59, 130, 246, 0.6);
   display: flex;
   flex-direction: column;
   align-items: center;
   z-index: 30;
-  touch-action: none;
-  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 -10px 35px rgba(0, 0, 0, 0.6);
   user-select: none;
   -webkit-user-select: none;
+  touch-action: none;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.palm-rest-shield.touching {
+.palm-rest-drawer.dragging {
+  border-top-color: #60a5fa;
+  box-shadow: 0 -10px 40px rgba(59, 130, 246, 0.4);
+}
+
+.palm-rest-drawer.touching {
   border-top: 2px solid #10b981;
-  box-shadow: 0 -8px 35px rgba(16, 185, 129, 0.35);
+  box-shadow: 0 -10px 40px rgba(16, 185, 129, 0.35);
 }
 
-.shield-header {
+/* Pull Tab Handle on Top of Drawer */
+.drawer-pull-tab {
   width: 100%;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  padding: 8px 16px;
-  gap: 6px;
-  background: rgba(30, 41, 59, 0.6);
+  justify-content: center;
+  padding: 6px 0;
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.8));
+  cursor: ns-resize;
   border-bottom: 1px solid var(--border-color);
+  touch-action: none;
 }
 
-.shield-title-row {
+.drawer-pull-tab:hover {
+  background: linear-gradient(180deg, rgba(51, 65, 85, 0.95), rgba(30, 41, 59, 0.9));
+}
+
+.drawer-handle-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  max-width: 900px;
-  gap: 12px;
+  gap: 8px;
+  padding: 2px 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  pointer-events: none;
 }
 
-.shield-title-group {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.grip-icon {
+  color: #60a5fa;
 }
 
-.shield-title {
+.drawer-handle-title {
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.5px;
+  color: #f1f5f9;
+}
+
+.drawer-drag-hint {
+  font-size: 10px;
+  font-weight: 600;
   color: #94a3b8;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* Drawer Controls Toolbar */
+.drawer-header-toolbar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  background: rgba(30, 41, 59, 0.5);
+  border-bottom: 1px solid var(--border-color);
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.drawer-preset-group {
   display: flex;
   align-items: center;
   gap: 6px;
-  white-space: nowrap;
 }
 
-.shield-lock-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-size: 10px;
+.drawer-control-label {
+  font-size: 11px;
   font-weight: 700;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-color);
-  transition: all 0.15s;
+  color: #94a3b8;
 }
 
-.shield-lock-btn.locked {
-  background: rgba(59, 130, 246, 0.2);
-  color: #60a5fa;
-  border-color: rgba(59, 130, 246, 0.4);
-}
-
-.shield-presets {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.shield-preset-btn {
+.drawer-preset-btn {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
-  padding: 3px 8px;
-  border-radius: 5px;
-  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
   font-weight: 700;
-  transition: all 0.15s;
+  transition: all 0.15s ease;
+  cursor: pointer;
 }
 
-.shield-preset-btn:hover {
+.drawer-preset-btn:hover {
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
 }
 
-.shield-preset-btn.active {
+.drawer-preset-btn.active {
   background: var(--accent-primary);
   color: #fff;
   border-color: var(--accent-primary);
+  box-shadow: 0 0 10px var(--accent-glow);
 }
 
-.shield-controls {
+/* Range Slider */
+.drawer-slider-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(15, 23, 42, 0.6);
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-color);
+}
+
+.drawer-height-slider {
+  width: 110px;
+  cursor: pointer;
+  accent-color: var(--accent-primary);
+}
+
+/* Step controls */
+.drawer-step-controls {
   display: flex;
   gap: 6px;
 }
 
-.shield-btn {
+.drawer-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   background: #1e293b;
   border: 1px solid var(--border-color);
   color: #f1f5f9;
   padding: 4px 10px;
   border-radius: 6px;
   font-size: 11px;
-  font-weight: 600;
-  transition: background 0.15s;
+  font-weight: 700;
+  transition: all 0.15s;
+  cursor: pointer;
 }
 
-.shield-btn:hover {
+.drawer-action-btn:hover {
   background: #334155;
+  color: #fff;
 }
 
-.shield-surface-pattern {
+/* Drawer Palm Resting Surface */
+.drawer-surface-pattern {
   flex: 1;
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
-  pointer-events: none;
+  touch-action: none;
+  cursor: default;
 }
 
 .pattern-text {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: rgba(255, 255, 255, 0.2);
   letter-spacing: 1px;
   text-transform: uppercase;
+  pointer-events: none;
 }
 
-.palm-rest-shield.touching .pattern-text {
+.palm-rest-drawer.touching .pattern-text {
   color: #10b981;
   font-weight: 800;
 }
@@ -647,5 +690,11 @@ input:checked + .slider:before {
     width: 160px;
     min-width: 160px;
     max-width: 160px;
+  }
+  .drawer-drag-hint {
+    display: none;
+  }
+  .drawer-slider-group {
+    display: none;
   }
 }

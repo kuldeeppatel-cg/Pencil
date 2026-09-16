@@ -12,8 +12,10 @@ import {
   Maximize,
   Minimize,
   Sparkles,
-  Lock,
-  Unlock,
+  ChevronUp,
+  ChevronDown,
+  GripHorizontal,
+  Sliders,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import './App.css';
@@ -51,7 +53,14 @@ const PRESET_COLORS = [
 ];
 
 const STROKE_SIZES = [2, 4, 8, 14, 24];
-const SHIELD_PRESET_HEIGHTS = [160, 240, 320, 420];
+
+const DRAWER_PRESETS = [
+  { label: 'Min', height: 90 },
+  { label: 'Compact', height: 180 },
+  { label: 'Standard', height: 260 },
+  { label: 'Expanded', height: 380 },
+  { label: 'Max', height: 500 },
+];
 
 export default function App() {
   // --- Drawing State ---
@@ -62,11 +71,11 @@ export default function App() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [redoStack, setRedoStack] = useState<Stroke[]>([]);
 
-  // --- Palm Rejection & Palm Shield State ---
+  // --- Palm Rejection & Palm Shield Drawer State ---
   const [palmMode, setPalmMode] = useState<PalmRejectionMode>('smart');
   const [showPalmShield, setShowPalmShield] = useState<boolean>(true);
-  const [palmShieldHeight, setPalmShieldHeight] = useState<number>(240);
-  const [isShieldLocked, setIsShieldLocked] = useState<boolean>(false);
+  const [palmShieldHeight, setPalmShieldHeight] = useState<number>(260);
+  const [isDrawerDragging, setIsDrawerDragging] = useState<boolean>(false);
   const [isPalmTouching, setIsPalmTouching] = useState<boolean>(false);
   const [pointerStatus, setPointerStatus] = useState<string>('Ready • Smart Palm Guard Active');
   const [isPointerBlocked, setIsPointerBlocked] = useState<boolean>(false);
@@ -79,6 +88,11 @@ export default function App() {
   const isDrawingRef = useRef<boolean>(false);
   const activePointerIdRef = useRef<number | null>(null);
   const ignoredPointerIdsRef = useRef<Set<number>>(new Set());
+
+  // Drawer Dragging Refs
+  const isDraggingDrawerRef = useRef<boolean>(false);
+  const dragStartYRef = useRef<number>(0);
+  const dragStartHeightRef = useRef<number>(260);
 
   // --- Prevent ALL browser touch gestures, pan scrolling, and viewport bouncing ---
   useEffect(() => {
@@ -284,7 +298,7 @@ export default function App() {
     if (isInsidePalmZone(e.clientY)) {
       ignoredPointerIdsRef.current.add(e.pointerId);
       setIsPalmTouching(true);
-      setPointerStatus('✋ Hand resting in Palm Guard Zone (Writing protected)');
+      setPointerStatus('✋ Hand resting in Palm Guard Drawer');
       setIsPointerBlocked(false);
       return;
     }
@@ -416,6 +430,44 @@ export default function App() {
           : 'Ready • Palm Guard Off'
       );
     }
+  };
+
+  // --- Drawer Pull Tab Dragging Handlers ---
+  const handleDrawerDragStart = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    isDraggingDrawerRef.current = true;
+    setIsDrawerDragging(true);
+    dragStartYRef.current = e.clientY;
+    dragStartHeightRef.current = palmShieldHeight;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handleDrawerDragMove = (e: React.PointerEvent) => {
+    if (!isDraggingDrawerRef.current) return;
+    e.stopPropagation();
+    const deltaY = dragStartYRef.current - e.clientY;
+    const newHeight = Math.max(80, Math.min(dragStartHeightRef.current + deltaY, 540));
+    setPalmShieldHeight(newHeight);
+  };
+
+  const handleDrawerDragEnd = (e: React.PointerEvent) => {
+    if (!isDraggingDrawerRef.current) return;
+    isDraggingDrawerRef.current = false;
+    setIsDrawerDragging(false);
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+  // --- Drawer Increment / Decrement ---
+  const expandDrawer = () => {
+    setPalmShieldHeight((prev) => Math.min(prev + 60, 540));
+  };
+
+  const shrinkDrawer = () => {
+    setPalmShieldHeight((prev) => Math.max(prev - 60, 80));
   };
 
   // --- Actions ---
@@ -601,7 +653,7 @@ export default function App() {
 
           <div className="toggle-item">
             <Hand size={16} color={showPalmShield ? '#10b981' : '#94a3b8'} />
-            <span className="toggle-label">Palm Shield</span>
+            <span className="toggle-label">Palm Drawer</span>
             <label className="switch">
               <input
                 type="checkbox"
@@ -614,7 +666,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* --- Secondary Sub-Toolbar (Colors & Paper Options) --- */}
+      {/* --- Secondary Sub-Toolbar (Locked Grid) --- */}
       <div className="secondary-bar">
         {/* Left: Color Palette */}
         <div className="sec-left">
@@ -679,93 +731,115 @@ export default function App() {
           onPointerLeave={handlePointerUp}
         />
 
-        {/* Solid Non-Moving Palm Rest Shield Zone */}
+        {/* --- Pull-Up Palm Rest Guard Drawer --- */}
         {showPalmShield && (
           <div
-            className={`palm-rest-shield ${isPalmTouching ? 'touching' : ''}`}
+            className={`palm-rest-drawer ${isPalmTouching ? 'touching' : ''} ${isDrawerDragging ? 'dragging' : ''}`}
             style={{ height: `${palmShieldHeight}px` }}
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              ignoredPointerIdsRef.current.add(e.pointerId);
-              setIsPalmTouching(true);
-              setPointerStatus('✋ Hand resting in Palm Guard Zone (Writing protected)');
-            }}
-            onPointerMove={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              ignoredPointerIdsRef.current.delete(e.pointerId);
-              if (ignoredPointerIdsRef.current.size === 0) {
-                setIsPalmTouching(false);
-              }
-            }}
-            onPointerCancel={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              ignoredPointerIdsRef.current.delete(e.pointerId);
-              if (ignoredPointerIdsRef.current.size === 0) {
-                setIsPalmTouching(false);
-              }
-            }}
           >
-            {/* Shield Top Border & Controls (Cannot be moved accidentally by resting palm) */}
-            <div className="shield-header">
-              <div className="shield-title-row">
-                <div className="shield-title-group">
-                  <span className="shield-title">
-                    ✋ PALM REST GUARD ZONE ({palmShieldHeight}px)
-                  </span>
-                  <button
-                    className={`shield-lock-btn ${isShieldLocked ? 'locked' : ''}`}
-                    onClick={() => setIsShieldLocked((prev) => !prev)}
-                    title={isShieldLocked ? 'Height Locked (Solid)' : 'Height Unlocked (Editable)'}
-                  >
-                    {isShieldLocked ? <Lock size={12} /> : <Unlock size={12} />}
-                    <span>{isShieldLocked ? 'Locked' : 'Adjustable'}</span>
-                  </button>
-                </div>
-
-                {!isShieldLocked && (
-                  <div className="shield-presets">
-                    {SHIELD_PRESET_HEIGHTS.map((h) => (
-                      <button
-                        key={h}
-                        className={`shield-preset-btn ${palmShieldHeight === h ? 'active' : ''}`}
-                        onClick={() => setPalmShieldHeight(h)}
-                      >
-                        {h}px
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                <div className="shield-controls">
-                  <button
-                    className="shield-btn"
-                    onClick={() => setPalmShieldHeight((h) => Math.min(h + 40, 480))}
-                    title="Increase shield height"
-                  >
-                    ▲ Expand
-                  </button>
-                  <button
-                    className="shield-btn"
-                    onClick={() => setPalmShieldHeight((h) => Math.max(h - 40, 120))}
-                    title="Decrease shield height"
-                  >
-                    ▼ Shrink
-                  </button>
-                </div>
+            {/* Top Drawer Pull Tab & Grip Handle (Interactive Drag / Pull Zone) */}
+            <div
+              className="drawer-pull-tab"
+              onPointerDown={handleDrawerDragStart}
+              onPointerMove={handleDrawerDragMove}
+              onPointerUp={handleDrawerDragEnd}
+              onPointerCancel={handleDrawerDragEnd}
+              title="Drag up or down to expand Palm Guard Drawer"
+            >
+              <div className="drawer-handle-bar">
+                <GripHorizontal size={18} className="grip-icon" />
+                <span className="drawer-handle-title">
+                  ✋ PALM REST DRAWER ({palmShieldHeight}px)
+                </span>
+                <span className="drawer-drag-hint">↕ Pull to Expand</span>
               </div>
             </div>
 
-            <div className="shield-surface-pattern">
+            {/* Drawer Controls Bar (Preset buttons & Expand/Shrink actions) */}
+            <div className="drawer-header-toolbar" onPointerDown={(e) => e.stopPropagation()}>
+              <div className="drawer-preset-group">
+                <span className="drawer-control-label">Presets:</span>
+                {DRAWER_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    className={`drawer-preset-btn ${Math.abs(palmShieldHeight - preset.height) < 25 ? 'active' : ''}`}
+                    onClick={() => setPalmShieldHeight(preset.height)}
+                  >
+                    {preset.label} ({preset.height}px)
+                  </button>
+                ))}
+              </div>
+
+              {/* Range Slider for Smooth Height Adjustment */}
+              <div className="drawer-slider-group">
+                <Sliders size={13} color="#94a3b8" />
+                <input
+                  type="range"
+                  min="80"
+                  max="540"
+                  step="10"
+                  value={palmShieldHeight}
+                  onChange={(e) => setPalmShieldHeight(Number(e.target.value))}
+                  className="drawer-height-slider"
+                  title="Adjust Drawer Height"
+                />
+              </div>
+
+              {/* Step Buttons */}
+              <div className="drawer-step-controls">
+                <button
+                  className="drawer-action-btn"
+                  onClick={expandDrawer}
+                  title="Expand Drawer Up"
+                >
+                  <ChevronUp size={15} />
+                  <span>Expand</span>
+                </button>
+                <button
+                  className="drawer-action-btn"
+                  onClick={shrinkDrawer}
+                  title="Shrink Drawer Down"
+                >
+                  <ChevronDown size={15} />
+                  <span>Shrink</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Resting Hand Surface (Absorbs Palm Contact) */}
+            <div
+              className="drawer-surface-pattern"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                ignoredPointerIdsRef.current.add(e.pointerId);
+                setIsPalmTouching(true);
+                setPointerStatus('✋ Hand resting in Palm Guard Drawer');
+              }}
+              onPointerMove={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onPointerUp={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                ignoredPointerIdsRef.current.delete(e.pointerId);
+                if (ignoredPointerIdsRef.current.size === 0) {
+                  setIsPalmTouching(false);
+                }
+              }}
+              onPointerCancel={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                ignoredPointerIdsRef.current.delete(e.pointerId);
+                if (ignoredPointerIdsRef.current.size === 0) {
+                  setIsPalmTouching(false);
+                }
+              }}
+            >
               <div className="pattern-grid" />
               <div className="pattern-text">
-                {isPalmTouching ? 'Hand Contact Absorbed • Safe to Write' : 'Rest Your Palm Comfortably Here'}
+                {isPalmTouching ? 'Hand Contact Absorbed • Safe to Write' : 'Rest Your Palm Comfortably on this Drawer'}
               </div>
             </div>
           </div>
