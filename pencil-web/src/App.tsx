@@ -74,7 +74,7 @@ export default function App() {
   // --- Palm Rejection & Palm Shield Drawer State ---
   const [palmMode, setPalmMode] = useState<PalmRejectionMode>('smart');
   const [showPalmShield, setShowPalmShield] = useState<boolean>(true);
-  const [palmShieldHeight, setPalmShieldHeight] = useState<number>(240);
+  const [palmShieldHeight, setPalmShieldHeight] = useState<number>(260);
   const [isDrawerDragging, setIsDrawerDragging] = useState<boolean>(false);
   const [isPalmTouching, setIsPalmTouching] = useState<boolean>(false);
   const [pointerStatus, setPointerStatus] = useState<string>('Ready • Palm Guard Active');
@@ -92,7 +92,7 @@ export default function App() {
   // Drawer Dragging Refs
   const isDraggingDrawerRef = useRef<boolean>(false);
   const dragStartYRef = useRef<number>(0);
-  const dragStartHeightRef = useRef<number>(240);
+  const dragStartHeightRef = useRef<number>(260);
 
   // --- Window-level pointer cleanup to prevent stuck drawing state ---
   useEffect(() => {
@@ -266,9 +266,26 @@ export default function App() {
     };
   };
 
+  // --- Check if pointer falls inside Palm Rest Zone ---
+  const isInsidePalmZone = (clientY: number) => {
+    if (!showPalmShield || !canvasWrapperRef.current) return false;
+    const rect = canvasWrapperRef.current.getBoundingClientRect();
+    const palmThresholdY = rect.bottom - palmShieldHeight;
+    return clientY >= palmThresholdY;
+  };
+
   // --- Pointer Down (Start Inking with Smart Palm Filtering) ---
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // 1. Hardware Stylus Mode (Strict Pen Only)
+    // 1. If touch lands inside the Palm Rest Zone (any size: large hand, wrist, knuckles) -> ABSORB & IGNORE
+    if (isInsidePalmZone(e.clientY)) {
+      ignoredPointerIdsRef.current.add(e.pointerId);
+      setIsPalmTouching(true);
+      setPointerStatus('✋ Hand resting in Palm Guard Zone • Ready to write');
+      setIsPointerBlocked(false);
+      return;
+    }
+
+    // 2. Hardware Stylus Mode (Strict Pen Only)
     if (palmMode === 'stylus' && e.pointerType !== 'pen') {
       ignoredPointerIdsRef.current.add(e.pointerId);
       setPointerStatus('🚫 Touch Ignored (Stylus Only Mode)');
@@ -276,33 +293,39 @@ export default function App() {
       return;
     }
 
-    // 2. Smart Palm Detection: Check contact dimensions
-    const isLargeContact = e.pointerType === 'touch' && (e.width > 28 || e.height > 28);
+    // 3. Smart Palm Detection: Check contact dimensions (large palm blob filter)
+    const isLargeContact = e.pointerType === 'touch' && (e.width > 24 || e.height > 24);
     if (palmMode === 'smart' && isLargeContact) {
       ignoredPointerIdsRef.current.add(e.pointerId);
       setIsPalmTouching(true);
-      setPointerStatus('✋ Palm Contact Filtered');
-      setIsPointerBlocked(true);
+      setPointerStatus('✋ Large Palm Contact Filtered');
+      setIsPointerBlocked(false);
       return;
     }
 
-    // 3. Multi-touch handling:
-    if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
-      if (e.pointerType === 'pen') {
-        // Priority to hardware pen
+    // 4. Inking Initiation & Multi-Touch Hand Takeover:
+    // Even if resting hand touches first, writing tip touching the canvas OUTSIDE palm zone immediately takes over!
+    if (e.pointerType === 'pen') {
+      // Pen always takes priority
+      if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
+        ignoredPointerIdsRef.current.add(activePointerIdRef.current);
         if (currentStrokeRef.current) {
           setStrokes((prev) => [...prev, currentStrokeRef.current!]);
         }
-        activePointerIdRef.current = null;
         currentStrokeRef.current = null;
+      }
+    } else if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
+      // If a previous contact was in palm zone or we are starting a fresh writing stroke
+      if (!isDrawingRef.current) {
+        ignoredPointerIdsRef.current.add(activePointerIdRef.current);
       } else {
-        // Secondary finger/hand contact while already writing -> ignore it
+        // Secondary finger contact while already drawing
         ignoredPointerIdsRef.current.add(e.pointerId);
         return;
       }
     }
 
-    // 4. Accept this pointer as the active drawing pointer
+    // 5. Accept this pointer as the active drawing pointer
     activePointerIdRef.current = e.pointerId;
     isDrawingRef.current = true;
     setIsPointerBlocked(false);
@@ -708,6 +731,24 @@ export default function App() {
           <div
             className={`palm-rest-drawer ${isPalmTouching ? 'touching' : ''} ${isDrawerDragging ? 'dragging' : ''}`}
             style={{ height: `${palmShieldHeight}px` }}
+            onPointerDown={(e) => {
+              // Absorb any hand touch on the palm drawer
+              ignoredPointerIdsRef.current.add(e.pointerId);
+              setIsPalmTouching(true);
+              setPointerStatus('✋ Hand resting in Palm Guard Zone • Writing active');
+            }}
+            onPointerUp={(e) => {
+              ignoredPointerIdsRef.current.delete(e.pointerId);
+              if (ignoredPointerIdsRef.current.size === 0) {
+                setIsPalmTouching(false);
+              }
+            }}
+            onPointerCancel={(e) => {
+              ignoredPointerIdsRef.current.delete(e.pointerId);
+              if (ignoredPointerIdsRef.current.size === 0) {
+                setIsPalmTouching(false);
+              }
+            }}
           >
             {/* Top Drawer Pull Tab & Grip Handle */}
             <div
@@ -781,30 +822,11 @@ export default function App() {
               </div>
             </div>
 
-            {/* Resting Hand Surface (Absorbs Palm Contact) */}
-            <div
-              className="drawer-surface-pattern"
-              onPointerDown={(e) => {
-                ignoredPointerIdsRef.current.add(e.pointerId);
-                setIsPalmTouching(true);
-                setPointerStatus('✋ Hand resting in Palm Guard Drawer');
-              }}
-              onPointerUp={(e) => {
-                ignoredPointerIdsRef.current.delete(e.pointerId);
-                if (ignoredPointerIdsRef.current.size === 0) {
-                  setIsPalmTouching(false);
-                }
-              }}
-              onPointerCancel={(e) => {
-                ignoredPointerIdsRef.current.delete(e.pointerId);
-                if (ignoredPointerIdsRef.current.size === 0) {
-                  setIsPalmTouching(false);
-                }
-              }}
-            >
+            {/* Resting Hand Surface (Absorbs Large Palm Contact) */}
+            <div className="drawer-surface-pattern">
               <div className="pattern-grid" />
               <div className="pattern-text">
-                {isPalmTouching ? 'Hand Contact Absorbed • Safe to Write' : 'Rest Your Palm Comfortably on this Drawer'}
+                {isPalmTouching ? 'Hand Contact Absorbed • Safe to Write Above' : 'Rest Your Whole Palm or Hand Here'}
               </div>
             </div>
           </div>
