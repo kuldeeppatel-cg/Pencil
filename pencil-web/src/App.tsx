@@ -81,12 +81,10 @@ export default function App() {
   const [isPointerBlocked, setIsPointerBlocked] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
-  // Canvas & Pointer Tracking Refs (Supports simultaneous palm-rest + inking)
+  // Canvas & Active Inking Strokes Map (Enables seamless writing even with hands resting)
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasWrapperRef = useRef<HTMLDivElement | null>(null);
-  const currentStrokeRef = useRef<Stroke | null>(null);
-  const isDrawingRef = useRef<boolean>(false);
-  const activePointerIdRef = useRef<number | null>(null);
+  const activeStrokesMapRef = useRef<Map<number, Stroke>>(new Map());
   const ignoredPointerIdsRef = useRef<Set<number>>(new Set());
 
   // Drawer Dragging Refs
@@ -94,20 +92,20 @@ export default function App() {
   const dragStartYRef = useRef<number>(0);
   const dragStartHeightRef = useRef<number>(260);
 
-  // --- Window-level pointer cleanup to prevent stuck drawing state ---
+  // --- Global pointer cleanup to guarantee no stuck pointers ---
   useEffect(() => {
-    const handleGlobalPointerUp = () => {
-      if (isDrawingRef.current && currentStrokeRef.current) {
-        const finished = currentStrokeRef.current;
+    const handleGlobalPointerUp = (e: PointerEvent) => {
+      ignoredPointerIdsRef.current.delete(e.pointerId);
+      if (activeStrokesMapRef.current.has(e.pointerId)) {
+        const finished = activeStrokesMapRef.current.get(e.pointerId)!;
         setStrokes((prev) => [...prev, finished]);
         setRedoStack([]);
-        currentStrokeRef.current = null;
+        activeStrokesMapRef.current.delete(e.pointerId);
+        renderCanvas();
       }
-      isDrawingRef.current = false;
-      activePointerIdRef.current = null;
-      ignoredPointerIdsRef.current.clear();
-      setIsPalmTouching(false);
-      setIsPointerBlocked(false);
+      if (ignoredPointerIdsRef.current.size === 0) {
+        setIsPalmTouching(false);
+      }
     };
 
     window.addEventListener('pointerup', handleGlobalPointerUp);
@@ -174,10 +172,9 @@ export default function App() {
       }
     }
 
-    // 4. Render All Completed Strokes
-    const allStrokes = currentStrokeRef.current
-      ? [...strokes, currentStrokeRef.current]
-      : strokes;
+    // 4. Render All Completed Strokes + All Active In-Flight Strokes
+    const inFlightStrokes = Array.from(activeStrokesMapRef.current.values());
+    const allStrokes = [...strokes, ...inFlightStrokes];
 
     for (const stroke of allStrokes) {
       if (stroke.points.length === 0) continue;
@@ -274,14 +271,13 @@ export default function App() {
     return clientY >= palmThresholdY;
   };
 
-  // --- Pointer Down (Start Inking with Smart Palm Filtering) ---
+  // --- Pointer Down (Start Inking with Complete Palm Isolation) ---
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // 1. If touch lands inside the Palm Rest Zone (any size: large hand, wrist, knuckles) -> ABSORB & IGNORE
+    // 1. If touch lands inside the Palm Rest Zone -> ABSORB as Palm (Zero drawing)
     if (isInsidePalmZone(e.clientY)) {
       ignoredPointerIdsRef.current.add(e.pointerId);
       setIsPalmTouching(true);
-      setPointerStatus('✋ Hand resting in Palm Guard Zone • Ready to write');
-      setIsPointerBlocked(false);
+      setPointerStatus('✋ Hand resting in Palm Guard Zone • Safe to write above');
       return;
     }
 
@@ -293,47 +289,28 @@ export default function App() {
       return;
     }
 
-    // 3. Smart Palm Detection: Check contact dimensions (large palm blob filter)
-    const isLargeContact = e.pointerType === 'touch' && (e.width > 24 || e.height > 24);
-    if (palmMode === 'smart' && isLargeContact) {
-      ignoredPointerIdsRef.current.add(e.pointerId);
-      setIsPalmTouching(true);
-      setPointerStatus('✋ Large Palm Contact Filtered');
-      setIsPointerBlocked(false);
-      return;
-    }
-
-    // 4. Inking Initiation & Multi-Touch Hand Takeover:
-    // Even if resting hand touches first, writing tip touching the canvas OUTSIDE palm zone immediately takes over!
+    // 3. Hardware Pen Priority: If a pen touches down, clear any accidental touch strokes
     if (e.pointerType === 'pen') {
-      // Pen always takes priority
-      if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
-        ignoredPointerIdsRef.current.add(activePointerIdRef.current);
-        if (currentStrokeRef.current) {
-          setStrokes((prev) => [...prev, currentStrokeRef.current!]);
+      // Remove any touch strokes currently in-flight so pen has exclusive priority
+      for (const [id] of activeStrokesMapRef.current.entries()) {
+        if (id !== e.pointerId) {
+          activeStrokesMapRef.current.delete(id);
         }
-        currentStrokeRef.current = null;
-      }
-    } else if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
-      // If a previous contact was in palm zone or we are starting a fresh writing stroke
-      if (!isDrawingRef.current) {
-        ignoredPointerIdsRef.current.add(activePointerIdRef.current);
-      } else {
-        // Secondary finger contact while already drawing
-        ignoredPointerIdsRef.current.add(e.pointerId);
-        return;
       }
     }
 
-    // 5. Accept this pointer as the active drawing pointer
-    activePointerIdRef.current = e.pointerId;
-    isDrawingRef.current = true;
-    setIsPointerBlocked(false);
+    // 4. Start Inking on the Canvas
+    try {
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
 
+    setIsPointerBlocked(false);
     setPointerStatus(
       e.pointerType === 'pen'
         ? `✏️ Stylus Inking ${e.pressure ? `(${(e.pressure * 100).toFixed(0)}%)` : ''}`
-        : '👆 Inking Active'
+        : '👆 Writing Active'
     );
 
     const pt = getCanvasCoords(e);
@@ -361,30 +338,35 @@ export default function App() {
       points: [pt],
     };
 
-    currentStrokeRef.current = newStroke;
+    activeStrokesMapRef.current.set(e.pointerId, newStroke);
     renderCanvas();
   };
 
-  // --- Pointer Move (Smooth Vector Pathing) ---
+  // --- Pointer Move (Continuous Vector Pathing) ---
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // If it's an ignored palm contact, do nothing
+    // If it's an ignored resting palm contact, do nothing
     if (ignoredPointerIdsRef.current.has(e.pointerId)) {
       return;
     }
 
-    // Only allow movement from the active writing pointer
-    if (!isDrawingRef.current || !currentStrokeRef.current || e.pointerId !== activePointerIdRef.current) {
-      return;
-    }
+    // If it's an active inking stroke, append point & redraw
+    const activeStroke = activeStrokesMapRef.current.get(e.pointerId);
+    if (!activeStroke) return;
 
     const pt = getCanvasCoords(e);
-    currentStrokeRef.current.points.push(pt);
+    activeStroke.points.push(pt);
     renderCanvas();
   };
 
   // --- Pointer Up / End ---
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // If it's an ignored palm pointer releasing, remove from set without stopping drawing!
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+
+    // If it's an ignored palm pointer releasing
     if (ignoredPointerIdsRef.current.has(e.pointerId)) {
       ignoredPointerIdsRef.current.delete(e.pointerId);
       if (ignoredPointerIdsRef.current.size === 0) {
@@ -393,18 +375,13 @@ export default function App() {
       return;
     }
 
-    // If it's the active writing pointer releasing
-    if (e.pointerId === activePointerIdRef.current) {
-      isDrawingRef.current = false;
-      activePointerIdRef.current = null;
-
-      if (currentStrokeRef.current) {
-        const finishedStroke = currentStrokeRef.current;
-        setStrokes((prev) => [...prev, finishedStroke]);
-        setRedoStack([]);
-        currentStrokeRef.current = null;
-        renderCanvas();
-      }
+    // If it's an active inking stroke finishing
+    if (activeStrokesMapRef.current.has(e.pointerId)) {
+      const finishedStroke = activeStrokesMapRef.current.get(e.pointerId)!;
+      setStrokes((prev) => [...prev, finishedStroke]);
+      setRedoStack([]);
+      activeStrokesMapRef.current.delete(e.pointerId);
+      renderCanvas();
 
       setPointerStatus(
         palmMode === 'smart'
@@ -470,11 +447,12 @@ export default function App() {
   };
 
   const handleClear = () => {
-    if (strokes.length === 0) return;
+    if (strokes.length === 0 && activeStrokesMapRef.current.size === 0) return;
     if (window.confirm('Clear the canvas?')) {
       setStrokes([]);
       setRedoStack([]);
-      currentStrokeRef.current = null;
+      activeStrokesMapRef.current.clear();
+      renderCanvas();
     }
   };
 
@@ -638,7 +616,7 @@ export default function App() {
               onChange={(e) => setPalmMode(e.target.value as PalmRejectionMode)}
               title="Select Palm Rejection Mode"
             >
-              <option value="smart">Smart Palm (Finger & Pen)</option>
+              <option value="smart">Smart Palm Guard</option>
               <option value="stylus">Stylus Only (Apple Pencil / Active Pen)</option>
               <option value="off">Off (Allow All)</option>
             </select>
@@ -732,10 +710,9 @@ export default function App() {
             className={`palm-rest-drawer ${isPalmTouching ? 'touching' : ''} ${isDrawerDragging ? 'dragging' : ''}`}
             style={{ height: `${palmShieldHeight}px` }}
             onPointerDown={(e) => {
-              // Absorb any hand touch on the palm drawer
               ignoredPointerIdsRef.current.add(e.pointerId);
               setIsPalmTouching(true);
-              setPointerStatus('✋ Hand resting in Palm Guard Zone • Writing active');
+              setPointerStatus('✋ Hand resting in Palm Guard Zone • Ready to write above');
             }}
             onPointerUp={(e) => {
               ignoredPointerIdsRef.current.delete(e.pointerId);
