@@ -74,10 +74,10 @@ export default function App() {
   // --- Palm Rejection & Palm Shield Drawer State ---
   const [palmMode, setPalmMode] = useState<PalmRejectionMode>('smart');
   const [showPalmShield, setShowPalmShield] = useState<boolean>(true);
-  const [palmShieldHeight, setPalmShieldHeight] = useState<number>(260);
+  const [palmShieldHeight, setPalmShieldHeight] = useState<number>(240);
   const [isDrawerDragging, setIsDrawerDragging] = useState<boolean>(false);
   const [isPalmTouching, setIsPalmTouching] = useState<boolean>(false);
-  const [pointerStatus, setPointerStatus] = useState<string>('Ready • Smart Palm Guard Active');
+  const [pointerStatus, setPointerStatus] = useState<string>('Ready • Palm Guard Active');
   const [isPointerBlocked, setIsPointerBlocked] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
@@ -92,46 +92,30 @@ export default function App() {
   // Drawer Dragging Refs
   const isDraggingDrawerRef = useRef<boolean>(false);
   const dragStartYRef = useRef<number>(0);
-  const dragStartHeightRef = useRef<number>(260);
+  const dragStartHeightRef = useRef<number>(240);
 
-  // --- Prevent ALL browser touch gestures, pan scrolling, and viewport bouncing ---
+  // --- Window-level pointer cleanup to prevent stuck drawing state ---
   useEffect(() => {
-    const handleTouch = (e: TouchEvent) => {
-      // Prevent browser default touch behavior (overscroll, pan, pinch)
-      if (e.cancelable) {
-        e.preventDefault();
+    const handleGlobalPointerUp = () => {
+      if (isDrawingRef.current && currentStrokeRef.current) {
+        const finished = currentStrokeRef.current;
+        setStrokes((prev) => [...prev, finished]);
+        setRedoStack([]);
+        currentStrokeRef.current = null;
       }
+      isDrawingRef.current = false;
+      activePointerIdRef.current = null;
+      ignoredPointerIdsRef.current.clear();
+      setIsPalmTouching(false);
+      setIsPointerBlocked(false);
     };
 
-    const handleGesture = (e: Event) => {
-      if (e.cancelable) {
-        e.preventDefault();
-      }
-    };
-
-    const handleContextMenu = (e: MouseEvent) => {
-      e.preventDefault();
-    };
-
-    // Attach passive: false listeners to document and window to prevent container movement
-    document.addEventListener('touchstart', handleTouch, { passive: false });
-    document.addEventListener('touchmove', handleTouch, { passive: false });
-    document.addEventListener('touchend', handleTouch, { passive: false });
-    document.addEventListener('touchcancel', handleTouch, { passive: false });
-    document.addEventListener('gesturestart', handleGesture, { passive: false });
-    document.addEventListener('gesturechange', handleGesture, { passive: false });
-    document.addEventListener('gestureend', handleGesture, { passive: false });
-    document.addEventListener('contextmenu', handleContextMenu);
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    window.addEventListener('pointercancel', handleGlobalPointerUp);
 
     return () => {
-      document.removeEventListener('touchstart', handleTouch);
-      document.removeEventListener('touchmove', handleTouch);
-      document.removeEventListener('touchend', handleTouch);
-      document.removeEventListener('touchcancel', handleTouch);
-      document.removeEventListener('gesturestart', handleGesture);
-      document.removeEventListener('gesturechange', handleGesture);
-      document.removeEventListener('gestureend', handleGesture);
-      document.removeEventListener('contextmenu', handleContextMenu);
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('pointercancel', handleGlobalPointerUp);
     };
   }, []);
 
@@ -282,47 +266,28 @@ export default function App() {
     };
   };
 
-  // --- Check if pointer falls inside Palm Rest Zone ---
-  const isInsidePalmZone = (clientY: number) => {
-    if (!showPalmShield || !canvasWrapperRef.current) return false;
-    const rect = canvasWrapperRef.current.getBoundingClientRect();
-    const palmThresholdY = rect.bottom - palmShieldHeight;
-    return clientY >= palmThresholdY;
-  };
-
-  // --- Pointer Down (Start Inking with Palm Filtering) ---
+  // --- Pointer Down (Start Inking with Smart Palm Filtering) ---
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-
-    // 1. If touch is inside the Palm Rest Shield zone -> Block it as palm rest!
-    if (isInsidePalmZone(e.clientY)) {
-      ignoredPointerIdsRef.current.add(e.pointerId);
-      setIsPalmTouching(true);
-      setPointerStatus('✋ Hand resting in Palm Guard Drawer');
-      setIsPointerBlocked(false);
-      return;
-    }
-
-    // 2. Hardware Stylus Mode (Strict Pen Only)
+    // 1. Hardware Stylus Mode (Strict Pen Only)
     if (palmMode === 'stylus' && e.pointerType !== 'pen') {
       ignoredPointerIdsRef.current.add(e.pointerId);
-      setPointerStatus('🚫 Touch Ignored (Hardware Stylus Mode)');
+      setPointerStatus('🚫 Touch Ignored (Stylus Only Mode)');
       setIsPointerBlocked(true);
       return;
     }
 
-    // 3. Smart Palm Detection: Check contact dimensions
-    const isLargeContact = e.pointerType === 'touch' && (e.width > 26 || e.height > 26);
+    // 2. Smart Palm Detection: Check contact dimensions
+    const isLargeContact = e.pointerType === 'touch' && (e.width > 28 || e.height > 28);
     if (palmMode === 'smart' && isLargeContact) {
       ignoredPointerIdsRef.current.add(e.pointerId);
       setIsPalmTouching(true);
-      setPointerStatus('✋ Large Palm Contact Filtered');
+      setPointerStatus('✋ Palm Contact Filtered');
       setIsPointerBlocked(true);
       return;
     }
 
-    // 4. Multi-touch handling:
-    if (activePointerIdRef.current !== null) {
+    // 3. Multi-touch handling:
+    if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
       if (e.pointerType === 'pen') {
         // Priority to hardware pen
         if (currentStrokeRef.current) {
@@ -337,7 +302,7 @@ export default function App() {
       }
     }
 
-    // 5. Accept this pointer as the active drawing pointer
+    // 4. Accept this pointer as the active drawing pointer
     activePointerIdRef.current = e.pointerId;
     isDrawingRef.current = true;
     setIsPointerBlocked(false);
@@ -379,8 +344,6 @@ export default function App() {
 
   // --- Pointer Move (Smooth Vector Pathing) ---
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-
     // If it's an ignored palm contact, do nothing
     if (ignoredPointerIdsRef.current.has(e.pointerId)) {
       return;
@@ -398,8 +361,6 @@ export default function App() {
 
   // --- Pointer Up / End ---
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-
     // If it's an ignored palm pointer releasing, remove from set without stopping drawing!
     if (ignoredPointerIdsRef.current.has(e.pointerId)) {
       ignoredPointerIdsRef.current.delete(e.pointerId);
@@ -537,6 +498,7 @@ export default function App() {
         {/* Primary Tool Selectors */}
         <div className="tools-cluster">
           <button
+            type="button"
             className={`tool-btn ${currentTool === 'PEN' ? 'active' : ''}`}
             onClick={() => {
               setCurrentTool('PEN');
@@ -548,6 +510,7 @@ export default function App() {
           </button>
 
           <button
+            type="button"
             className={`tool-btn ${currentTool === 'HIGHLIGHTER' ? 'active' : ''}`}
             onClick={() => {
               setCurrentTool('HIGHLIGHTER');
@@ -559,6 +522,7 @@ export default function App() {
           </button>
 
           <button
+            type="button"
             className={`tool-btn ${currentTool === 'ERASER' ? 'active' : ''}`}
             onClick={() => setCurrentTool('ERASER')}
           >
@@ -572,6 +536,7 @@ export default function App() {
           {STROKE_SIZES.map((size) => (
             <button
               key={size}
+              type="button"
               className={`size-btn ${strokeSize === size ? 'active' : ''}`}
               onClick={() => setStrokeSize(size)}
             >
@@ -589,6 +554,7 @@ export default function App() {
         {/* Action Controls */}
         <div className="actions-cluster">
           <button
+            type="button"
             className="action-btn"
             onClick={handleUndo}
             disabled={strokes.length === 0}
@@ -598,6 +564,7 @@ export default function App() {
           </button>
 
           <button
+            type="button"
             className="action-btn"
             onClick={handleRedo}
             disabled={redoStack.length === 0}
@@ -607,6 +574,7 @@ export default function App() {
           </button>
 
           <button
+            type="button"
             className="action-btn danger"
             onClick={handleClear}
             disabled={strokes.length === 0}
@@ -616,6 +584,7 @@ export default function App() {
           </button>
 
           <button
+            type="button"
             className="action-btn"
             onClick={handleExport}
             title="Export PNG"
@@ -624,6 +593,7 @@ export default function App() {
           </button>
 
           <button
+            type="button"
             className="action-btn"
             onClick={toggleFullscreen}
             title="Toggle Fullscreen"
@@ -675,6 +645,7 @@ export default function App() {
               {PRESET_COLORS.map((color) => (
                 <button
                   key={color}
+                  type="button"
                   className={`color-swatch ${selectedColor === color ? 'active' : ''}`}
                   style={{ backgroundColor: color }}
                   onClick={() => setSelectedColor(color)}
@@ -690,7 +661,7 @@ export default function App() {
             </div>
           ) : (
             <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>
-              🧹 Eraser Radius: {strokeSize * 4}px
+              🧹 Eraser Active • Radius: {strokeSize * 4}px
             </div>
           )}
         </div>
@@ -701,6 +672,7 @@ export default function App() {
             {(['ruled', 'grid', 'dots', 'blank', 'dark'] as PaperType[]).map((type) => (
               <button
                 key={type}
+                type="button"
                 className={`paper-btn ${paperStyle === type ? 'active' : ''}`}
                 onClick={() => setPaperStyle(type)}
               >
@@ -719,7 +691,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* --- Canvas Drawing Area (Fixed in place, non-scrolling) --- */}
+      {/* --- Canvas Drawing Area --- */}
       <main className="canvas-wrapper" ref={canvasWrapperRef}>
         <canvas
           ref={canvasRef}
@@ -737,7 +709,7 @@ export default function App() {
             className={`palm-rest-drawer ${isPalmTouching ? 'touching' : ''} ${isDrawerDragging ? 'dragging' : ''}`}
             style={{ height: `${palmShieldHeight}px` }}
           >
-            {/* Top Drawer Pull Tab & Grip Handle (Interactive Drag / Pull Zone) */}
+            {/* Top Drawer Pull Tab & Grip Handle */}
             <div
               className="drawer-pull-tab"
               onPointerDown={handleDrawerDragStart}
@@ -762,6 +734,7 @@ export default function App() {
                 {DRAWER_PRESETS.map((preset) => (
                   <button
                     key={preset.label}
+                    type="button"
                     className={`drawer-preset-btn ${Math.abs(palmShieldHeight - preset.height) < 25 ? 'active' : ''}`}
                     onClick={() => setPalmShieldHeight(preset.height)}
                   >
@@ -788,6 +761,7 @@ export default function App() {
               {/* Step Buttons */}
               <div className="drawer-step-controls">
                 <button
+                  type="button"
                   className="drawer-action-btn"
                   onClick={expandDrawer}
                   title="Expand Drawer Up"
@@ -796,6 +770,7 @@ export default function App() {
                   <span>Expand</span>
                 </button>
                 <button
+                  type="button"
                   className="drawer-action-btn"
                   onClick={shrinkDrawer}
                   title="Shrink Drawer Down"
@@ -810,27 +785,17 @@ export default function App() {
             <div
               className="drawer-surface-pattern"
               onPointerDown={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
                 ignoredPointerIdsRef.current.add(e.pointerId);
                 setIsPalmTouching(true);
                 setPointerStatus('✋ Hand resting in Palm Guard Drawer');
               }}
-              onPointerMove={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
               onPointerUp={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
                 ignoredPointerIdsRef.current.delete(e.pointerId);
                 if (ignoredPointerIdsRef.current.size === 0) {
                   setIsPalmTouching(false);
                 }
               }}
               onPointerCancel={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
                 ignoredPointerIdsRef.current.delete(e.pointerId);
                 if (ignoredPointerIdsRef.current.size === 0) {
                   setIsPalmTouching(false);
