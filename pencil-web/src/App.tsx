@@ -78,15 +78,13 @@ export default function App() {
   const [isDrawerDragging, setIsDrawerDragging] = useState<boolean>(false);
   const [isPalmTouching, setIsPalmTouching] = useState<boolean>(false);
   const [pointerStatus, setPointerStatus] = useState<string>('Ready • Palm Guard Active');
-  const [isPointerBlocked, setIsPointerBlocked] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
-  // References for robust native inking
+  // References for pure canvas inking
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasWrapperRef = useRef<HTMLDivElement | null>(null);
   const strokesRef = useRef<Stroke[]>([]);
-  const activeStrokesMapRef = useRef<Map<number | string, Stroke>>(new Map());
-  const ignoredPointerIdsRef = useRef<Set<number | string>>(new Set());
+  const currentStrokeRef = useRef<Stroke | null>(null);
 
   // Keep strokesRef in sync with state
   useEffect(() => {
@@ -105,8 +103,12 @@ export default function App() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const width = canvas.width / (window.devicePixelRatio || 1);
-    const height = canvas.height / (window.devicePixelRatio || 1);
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.width / dpr;
+    const height = canvas.height / dpr;
+
+    // Reset transform to exact DPR scale every frame
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // 1. Clear Canvas
     ctx.clearRect(0, 0, width, height);
@@ -153,9 +155,10 @@ export default function App() {
       }
     }
 
-    // 4. Render All Completed Strokes + In-Flight Active Strokes
-    const inFlightStrokes = Array.from(activeStrokesMapRef.current.values());
-    const allStrokes = [...strokesRef.current, ...inFlightStrokes];
+    // 4. Render All Completed Strokes + Current In-Flight Stroke
+    const allStrokes = currentStrokeRef.current
+      ? [...strokesRef.current, currentStrokeRef.current]
+      : strokesRef.current;
 
     for (const stroke of allStrokes) {
       if (stroke.points.length === 0) continue;
@@ -210,15 +213,11 @@ export default function App() {
     const dpr = window.devicePixelRatio || 1;
     const rect = parent.getBoundingClientRect();
 
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
     canvas.style.width = `${rect.width}px`;
     canvas.style.height = `${rect.height}px`;
 
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.scale(dpr, dpr);
-    }
     renderCanvas();
   }, [renderCanvas]);
 
@@ -232,234 +231,210 @@ export default function App() {
     renderCanvas();
   }, [renderCanvas, strokes]);
 
-  // --- Native Touch Event Listeners Attached Directly to Canvas (Bulletproof Palm Isolation) ---
+  // --- Rock-Solid Unified Pointer & Multi-Touch Inking Engine ---
+  const activePointerIdRef = useRef<number | null>(null);
+  const palmPointerIdsRef = useRef<Set<number>>(new Set());
+
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const wrapper = canvasWrapperRef.current;
+    if (!canvas || !wrapper) return;
 
-    const getTouchCoords = (touch: Touch): Point => {
+    const getCanvasPoint = (e: PointerEvent): Point => {
       const rect = canvas.getBoundingClientRect();
-      return {
-        x: touch.clientX - rect.left,
-        y: touch.clientY - rect.top,
-        pressure: (touch as any).force || 0.5,
-      };
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const pressure = e.pressure > 0 ? e.pressure : 0.5;
+      return { x, y, pressure };
     };
 
-    const isTouchInPalmZone = (clientY: number) => {
-      if (!showPalmShield || !canvasWrapperRef.current) return false;
+    const getPalmThresholdY = () => {
+      if (!showPalmShield || !canvasWrapperRef.current) return Infinity;
       const rect = canvasWrapperRef.current.getBoundingClientRect();
-      const palmThresholdY = rect.bottom - palmShieldHeight;
-      return clientY >= palmThresholdY;
+      return rect.bottom - palmShieldHeight;
     };
 
-    // 1. Native TouchStart
-    const onTouchStart = (e: TouchEvent) => {
-      e.preventDefault(); // Prevents browser from dropping touches or initiating gestures
+    const isPalmContact = (e: PointerEvent): boolean => {
+      const palmY = getPalmThresholdY();
 
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
+      // Stylus/Pen hardware tip is NEVER a palm - always allowed to ink
+      if (e.pointerType === 'pen') {
+        return false;
+      }
 
-        // If touch lands inside Palm Rest Zone -> Absorb as Palm (No drawing)
-        if (isTouchInPalmZone(touch.clientY)) {
-          ignoredPointerIdsRef.current.add(touch.identifier);
+      // Mouse is never a palm
+      if (e.pointerType === 'mouse') {
+        return false;
+      }
+
+      // 1. Any touch contact physically within the bottom Palm Rest Zone is 100% absorbed as palm
+      if (e.clientY >= palmY) {
+        return true;
+      }
+
+      // 2. Stylus-only mode: all touch inputs are rejected as palm
+      if (palmMode === 'stylus' && e.pointerType === 'touch') {
+        return true;
+      }
+
+      // 3. Smart mode: massive capacitive contact blobs (palm knuckles/heel) are palm
+      if (palmMode === 'smart' && e.pointerType === 'touch') {
+        const contactWidth = e.width || 0;
+        const contactHeight = e.height || 0;
+        if (contactWidth > 28 || contactHeight > 28) {
+          return true;
+        }
+      }
+
+      return false;
+    };
+
+    const handlePointerDown = (e: PointerEvent) => {
+      // Ignore clicks on header, toolbars, or control buttons
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('.top-header, .secondary-bar, .drawer-header-toolbar, .drawer-pull-tab')) {
+        if (e.clientY >= getPalmThresholdY()) {
+          palmPointerIdsRef.current.add(e.pointerId);
           setIsPalmTouching(true);
-          setPointerStatus('✋ Hand resting in Palm Guard Zone • Writing active above');
-          continue;
         }
-
-        // If Stylus only mode is active
-        if (palmMode === 'stylus') {
-          ignoredPointerIdsRef.current.add(touch.identifier);
-          setPointerStatus('🚫 Touch Ignored (Stylus Only Mode)');
-          setIsPointerBlocked(true);
-          continue;
-        }
-
-        // Start Inking on Canvas
-        setIsPointerBlocked(false);
-        setPointerStatus('👆 Writing Active');
-
-        const pt = getTouchCoords(touch);
-        let effectiveSize = strokeSize;
-        let opacity = 1.0;
-
-        if (currentTool === 'HIGHLIGHTER') {
-          effectiveSize = Math.max(strokeSize * 3.5, 24);
-          opacity = 0.38;
-        } else if (currentTool === 'ERASER') {
-          effectiveSize = Math.max(strokeSize * 4, 28);
-          opacity = 1.0;
-        } else {
-          effectiveSize = strokeSize;
-          opacity = 1.0;
-        }
-
-        const newStroke: Stroke = {
-          id: `stroke_${Date.now()}_${touch.identifier}_${Math.random()}`,
-          tool: currentTool,
-          color: currentTool === 'HIGHLIGHTER' && selectedColor === '#0f172a' ? '#facc15' : selectedColor,
-          size: effectiveSize,
-          opacity,
-          points: [pt],
-        };
-
-        activeStrokesMapRef.current.set(touch.identifier, newStroke);
+        return;
       }
 
-      renderCanvas();
-    };
-
-    // 2. Native TouchMove
-    const onTouchMove = (e: TouchEvent) => {
-      e.preventDefault(); // Prevents page scrolling & rubberband bounce
-
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-
-        if (ignoredPointerIdsRef.current.has(touch.identifier)) {
-          continue;
-        }
-
-        if (activeStrokesMapRef.current.has(touch.identifier)) {
-          const stroke = activeStrokesMapRef.current.get(touch.identifier)!;
-          const pt = getTouchCoords(touch);
-          stroke.points.push(pt);
-        }
+      // 1. Check if this pointer is a resting palm (e.g. anywhere in drawer or large blob)
+      if (isPalmContact(e)) {
+        palmPointerIdsRef.current.add(e.pointerId);
+        setIsPalmTouching(true);
+        setPointerStatus(`✋ Palm Absorbed (${palmPointerIdsRef.current.size} contacts) • Ready to write above`);
+        return;
       }
 
-      renderCanvas();
-    };
-
-    // 3. Native TouchEnd / TouchCancel
-    const onTouchEnd = (e: TouchEvent) => {
+      // 2. It is a legitimate inking tip (Pen/Stylus or Drawing Finger in writing area)!
       e.preventDefault();
 
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-
-        ignoredPointerIdsRef.current.delete(touch.identifier);
-
-        if (activeStrokesMapRef.current.has(touch.identifier)) {
-          const finishedStroke = activeStrokesMapRef.current.get(touch.identifier)!;
-          setStrokes((prev) => [...prev, finishedStroke]);
-          setRedoStack([]);
-          activeStrokesMapRef.current.delete(touch.identifier);
-        }
+      // If another pointer was already active and drawing, finalize it first
+      if (currentStrokeRef.current && activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
+        const finished = currentStrokeRef.current;
+        setStrokes((prev) => [...prev, finished]);
+        currentStrokeRef.current = null;
       }
 
-      if (ignoredPointerIdsRef.current.size === 0) {
-        setIsPalmTouching(false);
+      activePointerIdRef.current = e.pointerId;
+      const pt = getCanvasPoint(e);
+
+      let effectiveSize = strokeSize;
+      let opacity = 1.0;
+      if (currentTool === 'HIGHLIGHTER') {
+        effectiveSize = Math.max(strokeSize * 3.5, 24);
+        opacity = 0.38;
+      } else if (currentTool === 'ERASER') {
+        effectiveSize = Math.max(strokeSize * 4, 28);
+        opacity = 1.0;
       }
 
+      currentStrokeRef.current = {
+        id: `stroke_${Date.now()}_${Math.random()}`,
+        tool: currentTool,
+        color: currentTool === 'HIGHLIGHTER' && selectedColor === '#0f172a' ? '#facc15' : selectedColor,
+        size: effectiveSize,
+        opacity,
+        points: [pt],
+      };
+
+      setPointerStatus(
+        e.pointerType === 'pen'
+          ? `✏️ Stylus Inking ${e.pressure > 0 ? `(${(e.pressure * 100).toFixed(0)}%)` : ''}`
+          : '👆 Drawing Active'
+      );
       renderCanvas();
     };
 
-    // Attach non-passive native listeners to canvas
-    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
-    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
-    canvas.addEventListener('touchend', onTouchEnd, { passive: false });
-    canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
+    const handlePointerMove = (e: PointerEvent) => {
+      // If this pointer is a resting palm contact, ignore it completely
+      if (palmPointerIdsRef.current.has(e.pointerId)) {
+        return;
+      }
+
+      // If this pointer is the active inking tip, append point and render
+      if (e.pointerId === activePointerIdRef.current && currentStrokeRef.current) {
+        e.preventDefault();
+        const pt = getCanvasPoint(e);
+        currentStrokeRef.current.points.push(pt);
+        renderCanvas();
+      }
+    };
+
+    const handlePointerUp = (e: PointerEvent) => {
+      // 1. If it was a resting palm contact lifting
+      if (palmPointerIdsRef.current.has(e.pointerId)) {
+        palmPointerIdsRef.current.delete(e.pointerId);
+        const remainingPalm = palmPointerIdsRef.current.size;
+        setIsPalmTouching(remainingPalm > 0);
+        if (remainingPalm > 0) {
+          setPointerStatus(`✋ Palm Absorbed (${remainingPalm} contacts) • Ready to write above`);
+        } else if (activePointerIdRef.current === null) {
+          setPointerStatus(
+            palmMode === 'smart'
+              ? 'Ready • Palm Guard Active'
+              : palmMode === 'stylus'
+              ? 'Ready • Stylus Only Mode'
+              : 'Ready • Palm Guard Off'
+          );
+        }
+        return;
+      }
+
+      // 2. If it was the active inking tip lifting
+      if (e.pointerId === activePointerIdRef.current) {
+        if (currentStrokeRef.current) {
+          const finished = currentStrokeRef.current;
+          setStrokes((prev) => [...prev, finished]);
+          setRedoStack([]);
+          currentStrokeRef.current = null;
+        }
+        activePointerIdRef.current = null;
+        renderCanvas();
+        setPointerStatus(
+          palmPointerIdsRef.current.size > 0
+            ? `✋ Palm Absorbed (${palmPointerIdsRef.current.size} contacts) • Ready to write above`
+            : palmMode === 'smart'
+            ? 'Ready • Palm Guard Active'
+            : palmMode === 'stylus'
+            ? 'Ready • Stylus Only Mode'
+            : 'Ready • Palm Guard Off'
+        );
+      }
+    };
+
+    const handlePointerCancel = (e: PointerEvent) => {
+      handlePointerUp(e);
+    };
+
+    // Prevent default touch gestures (scrolling, zooming) strictly on canvas
+    const handleTouchGesturePrevent = (e: TouchEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest('button, input, select, .drawer-header-toolbar, .top-header, .secondary-bar')) {
+        e.preventDefault();
+      }
+    };
+
+    wrapper.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerCancel);
+
+    wrapper.addEventListener('touchstart', handleTouchGesturePrevent, { passive: false });
+    wrapper.addEventListener('touchmove', handleTouchGesturePrevent, { passive: false });
 
     return () => {
-      canvas.removeEventListener('touchstart', onTouchStart);
-      canvas.removeEventListener('touchmove', onTouchMove);
-      canvas.removeEventListener('touchend', onTouchEnd);
-      canvas.removeEventListener('touchcancel', onTouchEnd);
+      wrapper.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerCancel);
+
+      wrapper.removeEventListener('touchstart', handleTouchGesturePrevent);
+      wrapper.removeEventListener('touchmove', handleTouchGesturePrevent);
     };
   }, [showPalmShield, palmShieldHeight, palmMode, strokeSize, currentTool, selectedColor, renderCanvas]);
-
-  // --- Pointer Coordinates Normalizer for Mouse / Active Stylus ---
-  const getCanvasCoords = (e: React.PointerEvent<HTMLCanvasElement>): Point => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-      pressure: e.pressure > 0 ? e.pressure : 0.5,
-    };
-  };
-
-  const isInsidePalmZone = (clientY: number) => {
-    if (!showPalmShield || !canvasWrapperRef.current) return false;
-    const rect = canvasWrapperRef.current.getBoundingClientRect();
-    const palmThresholdY = rect.bottom - palmShieldHeight;
-    return clientY >= palmThresholdY;
-  };
-
-  // --- Pointer Handlers for Mouse & Active Hardware Stylus (Pen) ---
-  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // Touch is already handled by native touch listeners above
-    if (e.pointerType === 'touch') return;
-
-    if (isInsidePalmZone(e.clientY)) {
-      ignoredPointerIdsRef.current.add(e.pointerId);
-      setIsPalmTouching(true);
-      return;
-    }
-
-    setIsPointerBlocked(false);
-    setPointerStatus(
-      e.pointerType === 'pen'
-        ? `✏️ Stylus Inking ${e.pressure ? `(${(e.pressure * 100).toFixed(0)}%)` : ''}`
-        : '👆 Mouse Drawing Active'
-    );
-
-    const pt = getCanvasCoords(e);
-    let effectiveSize = strokeSize;
-    let opacity = 1.0;
-
-    if (currentTool === 'HIGHLIGHTER') {
-      effectiveSize = Math.max(strokeSize * 3.5, 24);
-      opacity = 0.38;
-    } else if (currentTool === 'ERASER') {
-      effectiveSize = Math.max(strokeSize * 4, 28);
-      opacity = 1.0;
-    } else {
-      effectiveSize = strokeSize;
-      opacity = 1.0;
-    }
-
-    const newStroke: Stroke = {
-      id: `stroke_${Date.now()}_${e.pointerId}_${Math.random()}`,
-      tool: currentTool,
-      color: currentTool === 'HIGHLIGHTER' && selectedColor === '#0f172a' ? '#facc15' : selectedColor,
-      size: effectiveSize,
-      opacity,
-      points: [pt],
-    };
-
-    activeStrokesMapRef.current.set(e.pointerId, newStroke);
-    renderCanvas();
-  };
-
-  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType === 'touch') return;
-
-    if (ignoredPointerIdsRef.current.has(e.pointerId)) return;
-
-    const activeStroke = activeStrokesMapRef.current.get(e.pointerId);
-    if (!activeStroke) return;
-
-    const pt = getCanvasCoords(e);
-    activeStroke.points.push(pt);
-    renderCanvas();
-  };
-
-  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType === 'touch') return;
-
-    ignoredPointerIdsRef.current.delete(e.pointerId);
-
-    if (activeStrokesMapRef.current.has(e.pointerId)) {
-      const finishedStroke = activeStrokesMapRef.current.get(e.pointerId)!;
-      setStrokes((prev) => [...prev, finishedStroke]);
-      setRedoStack([]);
-      activeStrokesMapRef.current.delete(e.pointerId);
-      renderCanvas();
-    }
-  };
 
   // --- Drawer Pull Tab Dragging Handlers ---
   const handleDrawerDragStart = (e: React.PointerEvent) => {
@@ -468,7 +443,9 @@ export default function App() {
     setIsDrawerDragging(true);
     dragStartYRef.current = e.clientY;
     dragStartHeightRef.current = palmShieldHeight;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
   };
 
   const handleDrawerDragMove = (e: React.PointerEvent) => {
@@ -484,10 +461,8 @@ export default function App() {
     isDraggingDrawerRef.current = false;
     setIsDrawerDragging(false);
     try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
   };
 
   // --- Drawer Increment / Decrement ---
@@ -515,11 +490,11 @@ export default function App() {
   };
 
   const handleClear = () => {
-    if (strokes.length === 0 && activeStrokesMapRef.current.size === 0) return;
+    if (strokes.length === 0 && !currentStrokeRef.current) return;
     if (window.confirm('Clear the canvas?')) {
       setStrokes([]);
       setRedoStack([]);
-      activeStrokesMapRef.current.clear();
+      currentStrokeRef.current = null;
       renderCanvas();
     }
   };
@@ -754,7 +729,7 @@ export default function App() {
         {/* Right: Live Pointer & Palm Status Badge */}
         <div className="sec-right">
           <div className="status-badge">
-            <div className={`status-dot ${isPointerBlocked ? 'blocked' : isPalmTouching ? 'palm-active' : ''}`} />
+            <div className={`status-dot ${isPalmTouching ? 'palm-active' : ''}`} />
             <span className="status-text">{pointerStatus}</span>
           </div>
         </div>
@@ -762,17 +737,13 @@ export default function App() {
 
       {/* --- Canvas Drawing Area --- */}
       <main className="canvas-wrapper" ref={canvasWrapperRef}>
+        {/* The single touch/drawing canvas */}
         <canvas
           ref={canvasRef}
           className="drawing-canvas"
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-          onPointerLeave={handlePointerUp}
         />
 
-        {/* --- Pull-Up Palm Rest Guard Drawer Overlay --- */}
+        {/* --- Palm Rest Guard Drawer Overlay --- */}
         {showPalmShield && (
           <div
             className={`palm-rest-drawer ${isPalmTouching ? 'touching' : ''} ${isDrawerDragging ? 'dragging' : ''}`}
@@ -797,7 +768,7 @@ export default function App() {
             </div>
 
             {/* Drawer Controls Bar (Preset buttons & Expand/Shrink actions) */}
-            <div className="drawer-header-toolbar" onPointerDown={(e) => e.stopPropagation()}>
+            <div className="drawer-header-toolbar">
               <div className="drawer-preset-group">
                 <span className="drawer-control-label">Presets:</span>
                 {DRAWER_PRESETS.map((preset) => (
