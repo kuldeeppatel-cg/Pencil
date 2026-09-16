@@ -81,12 +81,12 @@ export default function App() {
   const [isPointerBlocked, setIsPointerBlocked] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
-  // References for pure canvas inking
+  // References for robust native inking
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasWrapperRef = useRef<HTMLDivElement | null>(null);
   const strokesRef = useRef<Stroke[]>([]);
-  const activeStrokesMapRef = useRef<Map<number, Stroke>>(new Map());
-  const ignoredPointerIdsRef = useRef<Set<number>>(new Set());
+  const activeStrokesMapRef = useRef<Map<number | string, Stroke>>(new Map());
+  const ignoredPointerIdsRef = useRef<Set<number | string>>(new Set());
 
   // Keep strokesRef in sync with state
   useEffect(() => {
@@ -232,7 +232,144 @@ export default function App() {
     renderCanvas();
   }, [renderCanvas, strokes]);
 
-  // --- Pointer Coordinates Normalizer ---
+  // --- Native Touch Event Listeners Attached Directly to Canvas (Bulletproof Palm Isolation) ---
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const getTouchCoords = (touch: Touch): Point => {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: touch.clientX - rect.left,
+        y: touch.clientY - rect.top,
+        pressure: (touch as any).force || 0.5,
+      };
+    };
+
+    const isTouchInPalmZone = (clientY: number) => {
+      if (!showPalmShield || !canvasWrapperRef.current) return false;
+      const rect = canvasWrapperRef.current.getBoundingClientRect();
+      const palmThresholdY = rect.bottom - palmShieldHeight;
+      return clientY >= palmThresholdY;
+    };
+
+    // 1. Native TouchStart
+    const onTouchStart = (e: TouchEvent) => {
+      e.preventDefault(); // Prevents browser from dropping touches or initiating gestures
+
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+
+        // If touch lands inside Palm Rest Zone -> Absorb as Palm (No drawing)
+        if (isTouchInPalmZone(touch.clientY)) {
+          ignoredPointerIdsRef.current.add(touch.identifier);
+          setIsPalmTouching(true);
+          setPointerStatus('✋ Hand resting in Palm Guard Zone • Writing active above');
+          continue;
+        }
+
+        // If Stylus only mode is active
+        if (palmMode === 'stylus') {
+          ignoredPointerIdsRef.current.add(touch.identifier);
+          setPointerStatus('🚫 Touch Ignored (Stylus Only Mode)');
+          setIsPointerBlocked(true);
+          continue;
+        }
+
+        // Start Inking on Canvas
+        setIsPointerBlocked(false);
+        setPointerStatus('👆 Writing Active');
+
+        const pt = getTouchCoords(touch);
+        let effectiveSize = strokeSize;
+        let opacity = 1.0;
+
+        if (currentTool === 'HIGHLIGHTER') {
+          effectiveSize = Math.max(strokeSize * 3.5, 24);
+          opacity = 0.38;
+        } else if (currentTool === 'ERASER') {
+          effectiveSize = Math.max(strokeSize * 4, 28);
+          opacity = 1.0;
+        } else {
+          effectiveSize = strokeSize;
+          opacity = 1.0;
+        }
+
+        const newStroke: Stroke = {
+          id: `stroke_${Date.now()}_${touch.identifier}_${Math.random()}`,
+          tool: currentTool,
+          color: currentTool === 'HIGHLIGHTER' && selectedColor === '#0f172a' ? '#facc15' : selectedColor,
+          size: effectiveSize,
+          opacity,
+          points: [pt],
+        };
+
+        activeStrokesMapRef.current.set(touch.identifier, newStroke);
+      }
+
+      renderCanvas();
+    };
+
+    // 2. Native TouchMove
+    const onTouchMove = (e: TouchEvent) => {
+      e.preventDefault(); // Prevents page scrolling & rubberband bounce
+
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+
+        if (ignoredPointerIdsRef.current.has(touch.identifier)) {
+          continue;
+        }
+
+        if (activeStrokesMapRef.current.has(touch.identifier)) {
+          const stroke = activeStrokesMapRef.current.get(touch.identifier)!;
+          const pt = getTouchCoords(touch);
+          stroke.points.push(pt);
+        }
+      }
+
+      renderCanvas();
+    };
+
+    // 3. Native TouchEnd / TouchCancel
+    const onTouchEnd = (e: TouchEvent) => {
+      e.preventDefault();
+
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+
+        ignoredPointerIdsRef.current.delete(touch.identifier);
+
+        if (activeStrokesMapRef.current.has(touch.identifier)) {
+          const finishedStroke = activeStrokesMapRef.current.get(touch.identifier)!;
+          setStrokes((prev) => [...prev, finishedStroke]);
+          setRedoStack([]);
+          activeStrokesMapRef.current.delete(touch.identifier);
+        }
+      }
+
+      if (ignoredPointerIdsRef.current.size === 0) {
+        setIsPalmTouching(false);
+      }
+
+      renderCanvas();
+    };
+
+    // Attach non-passive native listeners to canvas
+    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+    canvas.addEventListener('touchend', onTouchEnd, { passive: false });
+    canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
+
+    return () => {
+      canvas.removeEventListener('touchstart', onTouchStart);
+      canvas.removeEventListener('touchmove', onTouchMove);
+      canvas.removeEventListener('touchend', onTouchEnd);
+      canvas.removeEventListener('touchcancel', onTouchEnd);
+    };
+  }, [showPalmShield, palmShieldHeight, palmMode, strokeSize, currentTool, selectedColor, renderCanvas]);
+
+  // --- Pointer Coordinates Normalizer for Mouse / Active Stylus ---
   const getCanvasCoords = (e: React.PointerEvent<HTMLCanvasElement>): Point => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
@@ -244,7 +381,6 @@ export default function App() {
     };
   };
 
-  // --- Check if pointer is inside Palm Rest Zone ---
   const isInsidePalmZone = (clientY: number) => {
     if (!showPalmShield || !canvasWrapperRef.current) return false;
     const rect = canvasWrapperRef.current.getBoundingClientRect();
@@ -252,42 +388,25 @@ export default function App() {
     return clientY >= palmThresholdY;
   };
 
-  // --- Pointer Down (Start Inking on Single Surface) ---
+  // --- Pointer Handlers for Mouse & Active Hardware Stylus (Pen) ---
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // 1. If pointer is inside the bottom Palm Rest Zone -> ABSORB as Palm (Zero drawing)
+    // Touch is already handled by native touch listeners above
+    if (e.pointerType === 'touch') return;
+
     if (isInsidePalmZone(e.clientY)) {
       ignoredPointerIdsRef.current.add(e.pointerId);
       setIsPalmTouching(true);
-      setPointerStatus('✋ Hand resting in Palm Guard Zone • Writing active above');
       return;
-    }
-
-    // 2. Hardware Stylus Mode (Strict Pen Only)
-    if (palmMode === 'stylus' && e.pointerType !== 'pen') {
-      ignoredPointerIdsRef.current.add(e.pointerId);
-      setPointerStatus('🚫 Touch Ignored (Stylus Only Mode)');
-      setIsPointerBlocked(true);
-      return;
-    }
-
-    // 3. Hardware Pen Priority: clear any accidental touch strokes
-    if (e.pointerType === 'pen') {
-      for (const [id] of activeStrokesMapRef.current.entries()) {
-        if (id !== e.pointerId) {
-          activeStrokesMapRef.current.delete(id);
-        }
-      }
     }
 
     setIsPointerBlocked(false);
     setPointerStatus(
       e.pointerType === 'pen'
         ? `✏️ Stylus Inking ${e.pressure ? `(${(e.pressure * 100).toFixed(0)}%)` : ''}`
-        : '👆 Writing Active'
+        : '👆 Mouse Drawing Active'
     );
 
     const pt = getCanvasCoords(e);
-
     let effectiveSize = strokeSize;
     let opacity = 1.0;
 
@@ -303,7 +422,7 @@ export default function App() {
     }
 
     const newStroke: Stroke = {
-      id: `stroke_${Date.now()}_${Math.random()}`,
+      id: `stroke_${Date.now()}_${e.pointerId}_${Math.random()}`,
       tool: currentTool,
       color: currentTool === 'HIGHLIGHTER' && selectedColor === '#0f172a' ? '#facc15' : selectedColor,
       size: effectiveSize,
@@ -315,14 +434,11 @@ export default function App() {
     renderCanvas();
   };
 
-  // --- Pointer Move (Continuous Vector Pathing) ---
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // If it's an ignored resting palm contact, do nothing
-    if (ignoredPointerIdsRef.current.has(e.pointerId)) {
-      return;
-    }
+    if (e.pointerType === 'touch') return;
 
-    // If it's an active inking stroke, append point & redraw
+    if (ignoredPointerIdsRef.current.has(e.pointerId)) return;
+
     const activeStroke = activeStrokesMapRef.current.get(e.pointerId);
     if (!activeStroke) return;
 
@@ -331,32 +447,17 @@ export default function App() {
     renderCanvas();
   };
 
-  // --- Pointer Up / End ---
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    // If it's an ignored palm pointer releasing
-    if (ignoredPointerIdsRef.current.has(e.pointerId)) {
-      ignoredPointerIdsRef.current.delete(e.pointerId);
-      if (ignoredPointerIdsRef.current.size === 0) {
-        setIsPalmTouching(false);
-      }
-      return;
-    }
+    if (e.pointerType === 'touch') return;
 
-    // If it's an active inking stroke finishing
+    ignoredPointerIdsRef.current.delete(e.pointerId);
+
     if (activeStrokesMapRef.current.has(e.pointerId)) {
       const finishedStroke = activeStrokesMapRef.current.get(e.pointerId)!;
       setStrokes((prev) => [...prev, finishedStroke]);
       setRedoStack([]);
       activeStrokesMapRef.current.delete(e.pointerId);
       renderCanvas();
-
-      setPointerStatus(
-        palmMode === 'smart'
-          ? 'Ready • Palm Guard Active'
-          : palmMode === 'stylus'
-          ? 'Ready • Stylus Only Mode'
-          : 'Ready • Palm Guard Off'
-      );
     }
   };
 
@@ -661,7 +762,6 @@ export default function App() {
 
       {/* --- Canvas Drawing Area --- */}
       <main className="canvas-wrapper" ref={canvasWrapperRef}>
-        {/* The one and only touch/drawing canvas */}
         <canvas
           ref={canvasRef}
           className="drawing-canvas"
@@ -672,7 +772,7 @@ export default function App() {
           onPointerLeave={handlePointerUp}
         />
 
-        {/* --- Palm Rest Guard Drawer Overlay --- */}
+        {/* --- Pull-Up Palm Rest Guard Drawer Overlay --- */}
         {showPalmShield && (
           <div
             className={`palm-rest-drawer ${isPalmTouching ? 'touching' : ''} ${isDrawerDragging ? 'dragging' : ''}`}
