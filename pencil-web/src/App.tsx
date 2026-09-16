@@ -12,6 +12,8 @@ import {
   Maximize,
   Minimize,
   Sparkles,
+  Lock,
+  Unlock,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import './App.css';
@@ -49,6 +51,7 @@ const PRESET_COLORS = [
 ];
 
 const STROKE_SIZES = [2, 4, 8, 14, 24];
+const SHIELD_PRESET_HEIGHTS = [160, 240, 320, 420];
 
 export default function App() {
   // --- Drawing State ---
@@ -63,6 +66,7 @@ export default function App() {
   const [palmMode, setPalmMode] = useState<PalmRejectionMode>('smart');
   const [showPalmShield, setShowPalmShield] = useState<boolean>(true);
   const [palmShieldHeight, setPalmShieldHeight] = useState<number>(240);
+  const [isShieldLocked, setIsShieldLocked] = useState<boolean>(true);
   const [isPalmTouching, setIsPalmTouching] = useState<boolean>(false);
   const [pointerStatus, setPointerStatus] = useState<string>('Ready • Smart Palm Guard Active');
   const [isPointerBlocked, setIsPointerBlocked] = useState<boolean>(false);
@@ -76,10 +80,46 @@ export default function App() {
   const activePointerIdRef = useRef<number | null>(null);
   const ignoredPointerIdsRef = useRef<Set<number>>(new Set());
 
-  // Shield Resizing State Ref
-  const isResizingShieldRef = useRef<boolean>(false);
-  const resizeStartYRef = useRef<number>(0);
-  const resizeStartHeightRef = useRef<number>(240);
+  // --- Prevent ALL browser touch gestures, pan scrolling, and viewport bouncing ---
+  useEffect(() => {
+    const handleTouch = (e: TouchEvent) => {
+      // Prevent browser default touch behavior (overscroll, pan, pinch)
+      if (e.cancelable) {
+        e.preventDefault();
+      }
+    };
+
+    const handleGesture = (e: Event) => {
+      if (e.cancelable) {
+        e.preventDefault();
+      }
+    };
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+
+    // Attach passive: false listeners to document and window to prevent container movement
+    document.addEventListener('touchstart', handleTouch, { passive: false });
+    document.addEventListener('touchmove', handleTouch, { passive: false });
+    document.addEventListener('touchend', handleTouch, { passive: false });
+    document.addEventListener('touchcancel', handleTouch, { passive: false });
+    document.addEventListener('gesturestart', handleGesture, { passive: false });
+    document.addEventListener('gesturechange', handleGesture, { passive: false });
+    document.addEventListener('gestureend', handleGesture, { passive: false });
+    document.addEventListener('contextmenu', handleContextMenu);
+
+    return () => {
+      document.removeEventListener('touchstart', handleTouch);
+      document.removeEventListener('touchmove', handleTouch);
+      document.removeEventListener('touchend', handleTouch);
+      document.removeEventListener('touchcancel', handleTouch);
+      document.removeEventListener('gesturestart', handleGesture);
+      document.removeEventListener('gesturechange', handleGesture);
+      document.removeEventListener('gestureend', handleGesture);
+      document.removeEventListener('contextmenu', handleContextMenu);
+    };
+  }, []);
 
   // --- Helper: Redraw All Canvas Strokes & Background Grid ---
   const renderCanvas = useCallback(() => {
@@ -238,6 +278,8 @@ export default function App() {
 
   // --- Pointer Down (Start Inking with Palm Filtering) ---
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+
     // 1. If touch is inside the Palm Rest Shield zone -> Block it as palm rest!
     if (isInsidePalmZone(e.clientY)) {
       ignoredPointerIdsRef.current.add(e.pointerId);
@@ -256,21 +298,19 @@ export default function App() {
     }
 
     // 3. Smart Palm Detection: Check contact dimensions
-    // Palm touches have large contact width / height (> 26px) on touchscreens
     const isLargeContact = e.pointerType === 'touch' && (e.width > 26 || e.height > 26);
     if (palmMode === 'smart' && isLargeContact) {
       ignoredPointerIdsRef.current.add(e.pointerId);
       setIsPalmTouching(true);
-      setPointerStatus('✋ Large Palm Contact Detected & Filtered');
+      setPointerStatus('✋ Large Palm Contact Filtered');
       setIsPointerBlocked(true);
       return;
     }
 
     // 4. Multi-touch handling:
-    // If pen comes down while touch was active, prioritize the pen!
     if (activePointerIdRef.current !== null) {
       if (e.pointerType === 'pen') {
-        // Cancel the prior touch stroke and allow pen inking
+        // Priority to hardware pen
         if (currentStrokeRef.current) {
           setStrokes((prev) => [...prev, currentStrokeRef.current!]);
         }
@@ -325,6 +365,8 @@ export default function App() {
 
   // --- Pointer Move (Smooth Vector Pathing) ---
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+
     // If it's an ignored palm contact, do nothing
     if (ignoredPointerIdsRef.current.has(e.pointerId)) {
       return;
@@ -342,6 +384,8 @@ export default function App() {
 
   // --- Pointer Up / End ---
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+
     // If it's an ignored palm pointer releasing, remove from set without stopping drawing!
     if (ignoredPointerIdsRef.current.has(e.pointerId)) {
       ignoredPointerIdsRef.current.delete(e.pointerId);
@@ -371,33 +415,6 @@ export default function App() {
           ? 'Ready • Stylus Only Mode'
           : 'Ready • Palm Guard Off'
       );
-    }
-  };
-
-  // --- Palm Shield Drag Resizing Handlers ---
-  const handleShieldResizeStart = (e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    isResizingShieldRef.current = true;
-    resizeStartYRef.current = e.clientY;
-    resizeStartHeightRef.current = palmShieldHeight;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-  };
-
-  const handleShieldResizeMove = (e: React.PointerEvent) => {
-    if (!isResizingShieldRef.current) return;
-    const deltaY = resizeStartYRef.current - e.clientY;
-    const newHeight = Math.max(120, Math.min(resizeStartHeightRef.current + deltaY, 520));
-    setPalmShieldHeight(newHeight);
-  };
-
-  const handleShieldResizeEnd = (e: React.PointerEvent) => {
-    if (!isResizingShieldRef.current) return;
-    isResizingShieldRef.current = false;
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
     }
   };
 
@@ -452,7 +469,7 @@ export default function App() {
   };
 
   return (
-    <div className="app-container">
+    <div className="app-container" onContextMenu={(e) => e.preventDefault()}>
       {/* --- Top Header & Main Toolbar --- */}
       <header className="top-header">
         <div className="brand-section">
@@ -584,7 +601,7 @@ export default function App() {
 
           <div className="toggle-item">
             <Hand size={16} color={showPalmShield ? '#10b981' : '#94a3b8'} />
-            <span className="toggle-label">Palm Shield Zone</span>
+            <span className="toggle-label">Palm Shield</span>
             <label className="switch">
               <input
                 type="checkbox"
@@ -644,7 +661,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* --- Canvas Drawing Area --- */}
+      {/* --- Canvas Drawing Area (Fixed in place, non-scrolling) --- */}
       <main className="canvas-wrapper" ref={canvasWrapperRef}>
         <canvas
           ref={canvasRef}
@@ -656,62 +673,82 @@ export default function App() {
           onPointerLeave={handlePointerUp}
         />
 
-        {/* Draggable/Adjustable Palm Rest Shield (For Capacitive Screens) */}
+        {/* Solid Non-Moving Palm Rest Shield Zone */}
         {showPalmShield && (
           <div
             className={`palm-rest-shield ${isPalmTouching ? 'touching' : ''}`}
             style={{ height: `${palmShieldHeight}px` }}
             onPointerDown={(e) => {
-              // Mark palm touch and absorb event so writing above is uninterrupted
+              e.preventDefault();
+              e.stopPropagation();
               ignoredPointerIdsRef.current.add(e.pointerId);
               setIsPalmTouching(true);
               setPointerStatus('✋ Hand resting in Palm Guard Zone (Writing protected)');
             }}
+            onPointerMove={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
             onPointerUp={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
               ignoredPointerIdsRef.current.delete(e.pointerId);
               if (ignoredPointerIdsRef.current.size === 0) {
                 setIsPalmTouching(false);
               }
             }}
             onPointerCancel={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
               ignoredPointerIdsRef.current.delete(e.pointerId);
               if (ignoredPointerIdsRef.current.size === 0) {
                 setIsPalmTouching(false);
               }
             }}
           >
-            {/* Draggable Handle Bar to Resize Shield */}
-            <div
-              className="shield-resizer"
-              onPointerDown={handleShieldResizeStart}
-              onPointerMove={handleShieldResizeMove}
-              onPointerUp={handleShieldResizeEnd}
-              onPointerCancel={handleShieldResizeEnd}
-              title="Drag up or down to adjust Palm Guard height"
-            >
-              <div className="shield-drag-bar" />
-            </div>
-
+            {/* Shield Top Border & Controls (Cannot be moved accidentally by resting palm) */}
             <div className="shield-header">
               <div className="shield-title-row">
-                <span className="shield-title">
-                  ✋ PALM REST GUARD ZONE ({palmShieldHeight}px)
-                </span>
-                <span className="shield-desc">
-                  Rest your hand freely here while writing above
-                </span>
+                <div className="shield-title-group">
+                  <span className="shield-title">
+                    ✋ PALM REST GUARD ZONE ({palmShieldHeight}px)
+                  </span>
+                  <button
+                    className={`shield-lock-btn ${isShieldLocked ? 'locked' : ''}`}
+                    onClick={() => setIsShieldLocked((prev) => !prev)}
+                    title={isShieldLocked ? 'Height Locked (Solid)' : 'Height Unlocked (Editable)'}
+                  >
+                    {isShieldLocked ? <Lock size={12} /> : <Unlock size={12} />}
+                    <span>{isShieldLocked ? 'Locked' : 'Adjustable'}</span>
+                  </button>
+                </div>
+
+                {!isShieldLocked && (
+                  <div className="shield-presets">
+                    {SHIELD_PRESET_HEIGHTS.map((h) => (
+                      <button
+                        key={h}
+                        className={`shield-preset-btn ${palmShieldHeight === h ? 'active' : ''}`}
+                        onClick={() => setPalmShieldHeight(h)}
+                      >
+                        {h}px
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <div className="shield-controls">
                   <button
                     className="shield-btn"
-                    onClick={() => setPalmShieldHeight((h) => Math.min(h + 50, 480))}
-                    title="Increase height"
+                    onClick={() => setPalmShieldHeight((h) => Math.min(h + 40, 480))}
+                    title="Increase shield height"
                   >
                     ▲ Expand
                   </button>
                   <button
                     className="shield-btn"
-                    onClick={() => setPalmShieldHeight((h) => Math.max(h - 50, 120))}
-                    title="Decrease height"
+                    onClick={() => setPalmShieldHeight((h) => Math.max(h - 40, 120))}
+                    title="Decrease shield height"
                   >
                     ▼ Shrink
                   </button>

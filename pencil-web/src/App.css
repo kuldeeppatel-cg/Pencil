@@ -3,9 +3,17 @@
   flex-direction: column;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   background-color: var(--bg-primary);
-  position: relative;
   overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-overscroll-behavior: none;
+  touch-action: none;
 }
 
 /* --- Top Header & Main Toolbar --- */
@@ -21,6 +29,8 @@
   z-index: 50;
   gap: 12px;
   flex-wrap: nowrap;
+  flex-shrink: 0;
+  user-select: none;
 }
 
 .brand-section {
@@ -287,6 +297,8 @@ input:checked + .slider:before {
   border-bottom: 1px solid var(--border-color);
   z-index: 40;
   gap: 12px;
+  flex-shrink: 0;
+  user-select: none;
 }
 
 .color-palette {
@@ -388,6 +400,7 @@ input:checked + .slider:before {
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
+  overflow: hidden;
 }
 
 .drawing-canvas {
@@ -406,47 +419,24 @@ input:checked + .slider:before {
   bottom: 0;
   left: 0;
   right: 0;
-  background: rgba(15, 23, 42, 0.92);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-top: 2px solid rgba(59, 130, 246, 0.5);
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-top: 2px solid rgba(59, 130, 246, 0.6);
   display: flex;
   flex-direction: column;
   align-items: center;
   z-index: 30;
   touch-action: none;
-  box-shadow: 0 -6px 25px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.6);
+  user-select: none;
+  -webkit-user-select: none;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .palm-rest-shield.touching {
   border-top: 2px solid #10b981;
-  box-shadow: 0 -6px 30px rgba(16, 185, 129, 0.3);
-}
-
-/* Resizer Grip Handle on Top of Shield */
-.shield-resizer {
-  width: 100%;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: ns-resize;
-  touch-action: none;
-  padding: 4px 0;
-}
-
-.shield-resizer:hover .shield-drag-bar {
-  background: #3b82f6;
-  width: 72px;
-}
-
-.shield-drag-bar {
-  width: 56px;
-  height: 5px;
-  border-radius: 3px;
-  background: #64748b;
-  transition: all 0.2s ease;
+  box-shadow: 0 -8px 35px rgba(16, 185, 129, 0.35);
 }
 
 .shield-header {
@@ -454,8 +444,10 @@ input:checked + .slider:before {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 2px 16px 8px;
-  gap: 4px;
+  padding: 8px 16px;
+  gap: 6px;
+  background: rgba(30, 41, 59, 0.6);
+  border-bottom: 1px solid var(--border-color);
 }
 
 .shield-title-row {
@@ -463,8 +455,14 @@ input:checked + .slider:before {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  max-width: 800px;
+  max-width: 900px;
   gap: 12px;
+}
+
+.shield-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .shield-title {
@@ -478,15 +476,57 @@ input:checked + .slider:before {
   white-space: nowrap;
 }
 
-.shield-desc {
-  font-size: 11px;
-  color: #64748b;
-  font-style: italic;
+.shield-lock-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+  transition: all 0.15s;
+}
+
+.shield-lock-btn.locked {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.4);
+}
+
+.shield-presets {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shield-preset-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  transition: all 0.15s;
+}
+
+.shield-preset-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.shield-preset-btn.active {
+  background: var(--accent-primary);
+  color: #fff;
+  border-color: var(--accent-primary);
 }
 
 .shield-controls {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .shield-btn {
@@ -511,26 +551,25 @@ input:checked + .slider:before {
   align-items: center;
   justify-content: center;
   position: relative;
-  border-top: 1px dashed rgba(255, 255, 255, 0.08);
   pointer-events: none;
 }
 
 .pattern-text {
-  font-size: 13px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.25);
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.2);
   letter-spacing: 1px;
   text-transform: uppercase;
 }
 
 .palm-rest-shield.touching .pattern-text {
   color: #10b981;
-  font-weight: 700;
+  font-weight: 800;
 }
 
 /* Responsive queries */
 @media (max-width: 900px) {
-  .brand-subtitle, .shield-desc {
+  .brand-subtitle {
     display: none;
   }
   .tool-btn span {
