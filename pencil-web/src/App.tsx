@@ -616,48 +616,54 @@ export default function App() {
 
       {/* --- Secondary Sub-Toolbar (Colors & Paper Options) --- */}
       <div className="secondary-bar">
-        {/* Color Palette */}
-        {currentTool !== 'ERASER' ? (
-          <div className="color-palette">
-            {PRESET_COLORS.map((color) => (
-              <button
-                key={color}
-                className={`color-swatch ${selectedColor === color ? 'active' : ''}`}
-                style={{ backgroundColor: color }}
-                onClick={() => setSelectedColor(color)}
+        {/* Left: Color Palette */}
+        <div className="sec-left">
+          {currentTool !== 'ERASER' ? (
+            <div className="color-palette">
+              {PRESET_COLORS.map((color) => (
+                <button
+                  key={color}
+                  className={`color-swatch ${selectedColor === color ? 'active' : ''}`}
+                  style={{ backgroundColor: color }}
+                  onClick={() => setSelectedColor(color)}
+                />
+              ))}
+              <input
+                type="color"
+                className="custom-color-picker"
+                value={selectedColor}
+                onChange={(e) => setSelectedColor(e.target.value)}
+                title="Custom Color"
               />
-            ))}
-            <input
-              type="color"
-              className="custom-color-picker"
-              value={selectedColor}
-              onChange={(e) => setSelectedColor(e.target.value)}
-              title="Custom Color"
-            />
-          </div>
-        ) : (
-          <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>
-            🧹 Eraser Radius: {strokeSize * 4}px
-          </div>
-        )}
-
-        {/* Paper Backgrounds */}
-        <div className="paper-selector">
-          {(['ruled', 'grid', 'dots', 'blank', 'dark'] as PaperType[]).map((type) => (
-            <button
-              key={type}
-              className={`paper-btn ${paperStyle === type ? 'active' : ''}`}
-              onClick={() => setPaperStyle(type)}
-            >
-              {type}
-            </button>
-          ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: '12px', color: '#94a3b8', fontWeight: 600 }}>
+              🧹 Eraser Radius: {strokeSize * 4}px
+            </div>
+          )}
         </div>
 
-        {/* Live Pointer & Palm Status Badge */}
-        <div className="status-badge">
-          <div className={`status-dot ${isPointerBlocked ? 'blocked' : isPalmTouching ? 'palm-active' : ''}`} />
-          <span className="status-text">{pointerStatus}</span>
+        {/* Center: Paper Backgrounds */}
+        <div className="sec-center">
+          <div className="paper-selector">
+            {(['ruled', 'grid', 'dots', 'blank', 'dark'] as PaperType[]).map((type) => (
+              <button
+                key={type}
+                className={`paper-btn ${paperStyle === type ? 'active' : ''}`}
+                onClick={() => setPaperStyle(type)}
+              >
+                {type}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Right: Live Pointer & Palm Status Badge */}
+        <div className="sec-right">
+          <div className="status-badge">
+            <div className={`status-dot ${isPointerBlocked ? 'blocked' : isPalmTouching ? 'palm-active' : ''}`} />
+            <span className="status-text">{pointerStatus}</span>
+          </div>
         </div>
       </div>
 
