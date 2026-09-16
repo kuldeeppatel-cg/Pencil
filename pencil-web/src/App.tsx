@@ -16,13 +16,14 @@ import {
   ChevronDown,
   GripHorizontal,
   Sliders,
+  CheckCircle2,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import './App.css';
 
 type ToolType = 'PEN' | 'HIGHLIGHTER' | 'ERASER';
 type PaperType = 'ruled' | 'grid' | 'dots' | 'blank' | 'dark';
-type PalmRejectionMode = 'smart' | 'stylus' | 'off';
+type PalmRejectionMode = 'fullscreen-smart' | 'stylus' | 'off';
 
 interface Point {
   x: number;
@@ -71,17 +72,17 @@ export default function App() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [redoStack, setRedoStack] = useState<Stroke[]>([]);
 
-  // --- Palm Rejection & Palm Shield Drawer State ---
-  const [palmMode, setPalmMode] = useState<PalmRejectionMode>('smart');
-  const [showPalmShield, setShowPalmShield] = useState<boolean>(true);
-  const [palmShieldHeight, setPalmShieldHeight] = useState<number>(260);
+  // --- Whole-Screen Palm Guard & Drawer State ---
+  const [palmMode, setPalmMode] = useState<PalmRejectionMode>('fullscreen-smart');
+  const [showPalmDrawer, setShowPalmDrawer] = useState<boolean>(false);
+  const [palmDrawerHeight, setPalmDrawerHeight] = useState<number>(240);
   const [isDrawerDragging, setIsDrawerDragging] = useState<boolean>(false);
   const [isPalmTouching, setIsPalmTouching] = useState<boolean>(false);
-  const [pointerStatus, setPointerStatus] = useState<string>('Ready • Smart Palm Guard Active');
+  const [pointerStatus, setPointerStatus] = useState<string>('🛡️ Whole-Screen Palm Guard: Active');
   const [isPointerBlocked, setIsPointerBlocked] = useState<boolean>(false);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
 
-  // Canvas & Pointer Tracking Refs (Supports simultaneous palm-rest + inking)
+  // Canvas & Pointer Tracking Refs (Supports simultaneous palm-rest + inking ANYWHERE on canvas)
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasWrapperRef = useRef<HTMLDivElement | null>(null);
   const currentStrokeRef = useRef<Stroke | null>(null);
@@ -89,15 +90,17 @@ export default function App() {
   const activePointerIdRef = useRef<number | null>(null);
   const ignoredPointerIdsRef = useRef<Set<number>>(new Set());
 
+  // Contact points cache to distinguish palm blobs from stylus/finger tips across the entire canvas
+  const activeContactsRef = useRef<Map<number, { width: number; height: number; type: string; startY: number }>>(new Map());
+
   // Drawer Dragging Refs
   const isDraggingDrawerRef = useRef<boolean>(false);
   const dragStartYRef = useRef<number>(0);
-  const dragStartHeightRef = useRef<number>(260);
+  const dragStartHeightRef = useRef<number>(240);
 
   // --- Prevent ALL browser touch gestures, pan scrolling, and viewport bouncing ---
   useEffect(() => {
     const handleTouch = (e: TouchEvent) => {
-      // Prevent browser default touch behavior (overscroll, pan, pinch)
       if (e.cancelable) {
         e.preventDefault();
       }
@@ -113,7 +116,6 @@ export default function App() {
       e.preventDefault();
     };
 
-    // Attach passive: false listeners to document and window to prevent container movement
     document.addEventListener('touchstart', handleTouch, { passive: false });
     document.addEventListener('touchmove', handleTouch, { passive: false });
     document.addEventListener('touchend', handleTouch, { passive: false });
@@ -282,62 +284,75 @@ export default function App() {
     };
   };
 
-  // --- Check if pointer falls inside Palm Rest Zone ---
-  const isInsidePalmZone = (clientY: number) => {
-    if (!showPalmShield || !canvasWrapperRef.current) return false;
+  // --- Check if pointer falls inside optional bottom drawer ---
+  const isInsideOptionalDrawer = (clientY: number) => {
+    if (!showPalmDrawer || !canvasWrapperRef.current) return false;
     const rect = canvasWrapperRef.current.getBoundingClientRect();
-    const palmThresholdY = rect.bottom - palmShieldHeight;
+    const palmThresholdY = rect.bottom - palmDrawerHeight;
     return clientY >= palmThresholdY;
   };
 
-  // --- Pointer Down (Start Inking with Palm Filtering) ---
+  // --- Whole-Screen Pointer Down Handler ---
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
 
-    // 1. If touch is inside the Palm Rest Shield zone -> Block it as palm rest!
-    if (isInsidePalmZone(e.clientY)) {
+    // Record contact details
+    activeContactsRef.current.set(e.pointerId, {
+      width: e.width || 1,
+      height: e.height || 1,
+      type: e.pointerType,
+      startY: e.clientY,
+    });
+
+    // 1. If touch is inside optional visual drawer -> Absorb as palm
+    if (isInsideOptionalDrawer(e.clientY)) {
       ignoredPointerIdsRef.current.add(e.pointerId);
       setIsPalmTouching(true);
-      setPointerStatus('✋ Hand resting in Palm Guard Drawer');
+      setPointerStatus('✋ Hand resting in Palm Drawer');
       setIsPointerBlocked(false);
       return;
     }
 
-    // 2. Hardware Stylus Mode (Strict Pen Only)
+    // 2. Strict Hardware Stylus Mode (Apple Pencil / S-Pen / Surface Pen)
     if (palmMode === 'stylus' && e.pointerType !== 'pen') {
       ignoredPointerIdsRef.current.add(e.pointerId);
-      setPointerStatus('🚫 Touch Ignored (Hardware Stylus Mode)');
+      setPointerStatus('🚫 Touch Ignored (Stylus Only Mode)');
       setIsPointerBlocked(true);
       return;
     }
 
-    // 3. Smart Palm Detection: Check contact dimensions
-    const isLargeContact = e.pointerType === 'touch' && (e.width > 26 || e.height > 26);
-    if (palmMode === 'smart' && isLargeContact) {
+    // 3. Whole-Screen Smart Palm Detection (Works anywhere across the entire canvas)
+    // Palm touches have large contact width / height or large area on touchscreens
+    const isPalmDimension =
+      e.pointerType === 'touch' &&
+      (e.width > 20 || e.height > 20 || (e.width * e.height > 360));
+
+    if (palmMode === 'fullscreen-smart' && isPalmDimension) {
       ignoredPointerIdsRef.current.add(e.pointerId);
       setIsPalmTouching(true);
-      setPointerStatus('✋ Large Palm Contact Filtered');
+      setPointerStatus('✋ Whole-Screen Palm Contact Filtered');
       setIsPointerBlocked(true);
       return;
     }
 
-    // 4. Multi-touch handling:
-    if (activePointerIdRef.current !== null) {
-      if (e.pointerType === 'pen') {
-        // Priority to hardware pen
+    // 4. Multi-Touch Priority & Simultaneous Palm Filtering:
+    // If a hardware pen touches down while a touch was active, pen takes over 100%!
+    if (e.pointerType === 'pen') {
+      if (activePointerIdRef.current !== null && activePointerIdRef.current !== e.pointerId) {
+        ignoredPointerIdsRef.current.add(activePointerIdRef.current);
         if (currentStrokeRef.current) {
           setStrokes((prev) => [...prev, currentStrokeRef.current!]);
         }
-        activePointerIdRef.current = null;
         currentStrokeRef.current = null;
-      } else {
-        // Secondary finger/hand contact while already writing -> ignore it
-        ignoredPointerIdsRef.current.add(e.pointerId);
-        return;
       }
+    } else if (activePointerIdRef.current !== null) {
+      // Secondary finger/hand contact while already writing -> automatically treat as resting hand
+      ignoredPointerIdsRef.current.add(e.pointerId);
+      setIsPalmTouching(true);
+      return;
     }
 
-    // 5. Accept this pointer as the active drawing pointer
+    // 5. Accept this pointer as the active inking tip anywhere on the canvas
     activePointerIdRef.current = e.pointerId;
     isDrawingRef.current = true;
     setIsPointerBlocked(false);
@@ -345,7 +360,7 @@ export default function App() {
     setPointerStatus(
       e.pointerType === 'pen'
         ? `✏️ Stylus Inking ${e.pressure ? `(${(e.pressure * 100).toFixed(0)}%)` : ''}`
-        : '👆 Inking Active'
+        : '👆 Whole-Screen Inking Active'
     );
 
     const pt = getCanvasCoords(e);
@@ -381,7 +396,7 @@ export default function App() {
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
 
-    // If it's an ignored palm contact, do nothing
+    // If it's an ignored palm contact anywhere on screen, do nothing
     if (ignoredPointerIdsRef.current.has(e.pointerId)) {
       return;
     }
@@ -399,6 +414,8 @@ export default function App() {
   // --- Pointer Up / End ---
   const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
+
+    activeContactsRef.current.delete(e.pointerId);
 
     // If it's an ignored palm pointer releasing, remove from set without stopping drawing!
     if (ignoredPointerIdsRef.current.has(e.pointerId)) {
@@ -423,10 +440,10 @@ export default function App() {
       }
 
       setPointerStatus(
-        palmMode === 'smart'
-          ? 'Ready • Smart Palm Guard Active'
+        palmMode === 'fullscreen-smart'
+          ? '🛡️ Whole-Screen Palm Guard: Active'
           : palmMode === 'stylus'
-          ? 'Ready • Stylus Only Mode'
+          ? '✏️ Stylus Only Mode'
           : 'Ready • Palm Guard Off'
       );
     }
@@ -438,7 +455,7 @@ export default function App() {
     isDraggingDrawerRef.current = true;
     setIsDrawerDragging(true);
     dragStartYRef.current = e.clientY;
-    dragStartHeightRef.current = palmShieldHeight;
+    dragStartHeightRef.current = palmDrawerHeight;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
 
@@ -447,7 +464,7 @@ export default function App() {
     e.stopPropagation();
     const deltaY = dragStartYRef.current - e.clientY;
     const newHeight = Math.max(80, Math.min(dragStartHeightRef.current + deltaY, 540));
-    setPalmShieldHeight(newHeight);
+    setPalmDrawerHeight(newHeight);
   };
 
   const handleDrawerDragEnd = (e: React.PointerEvent) => {
@@ -463,11 +480,11 @@ export default function App() {
 
   // --- Drawer Increment / Decrement ---
   const expandDrawer = () => {
-    setPalmShieldHeight((prev) => Math.min(prev + 60, 540));
+    setPalmDrawerHeight((prev) => Math.min(prev + 60, 540));
   };
 
   const shrinkDrawer = () => {
-    setPalmShieldHeight((prev) => Math.max(prev - 60, 80));
+    setPalmDrawerHeight((prev) => Math.max(prev - 60, 80));
   };
 
   // --- Actions ---
@@ -530,7 +547,7 @@ export default function App() {
           </div>
           <div className="brand-text">
             <span className="brand-title">Pencil Studio</span>
-            <span className="brand-subtitle">Smart Palm Rejection & Inking</span>
+            <span className="brand-subtitle">Whole-Screen Palm Rejection</span>
           </div>
         </div>
 
@@ -632,7 +649,7 @@ export default function App() {
           </button>
         </div>
 
-        {/* Palm Rejection Mode Selector */}
+        {/* Whole-Screen Palm Rejection & Optional Drawer Toggles */}
         <div className="palm-cluster">
           <div className="palm-mode-dropdown-wrap">
             <div className="palm-mode-label">
@@ -645,20 +662,20 @@ export default function App() {
               onChange={(e) => setPalmMode(e.target.value as PalmRejectionMode)}
               title="Select Palm Rejection Mode"
             >
-              <option value="smart">Smart Palm (Finger & Pen)</option>
+              <option value="fullscreen-smart">Whole-Screen (Rest Anywhere)</option>
               <option value="stylus">Stylus Only (Apple Pencil / Active Pen)</option>
               <option value="off">Off (Allow All)</option>
             </select>
           </div>
 
           <div className="toggle-item">
-            <Hand size={16} color={showPalmShield ? '#10b981' : '#94a3b8'} />
-            <span className="toggle-label">Palm Drawer</span>
+            <Hand size={16} color={showPalmDrawer ? '#10b981' : '#94a3b8'} />
+            <span className="toggle-label">Rest Drawer</span>
             <label className="switch">
               <input
                 type="checkbox"
-                checked={showPalmShield}
-                onChange={(e) => setShowPalmShield(e.target.checked)}
+                checked={showPalmDrawer}
+                onChange={(e) => setShowPalmDrawer(e.target.checked)}
               />
               <span className="slider green"></span>
             </label>
@@ -710,16 +727,16 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right: Live Pointer & Palm Status Badge */}
+        {/* Right: Live Pointer & Whole-Screen Palm Status Badge */}
         <div className="sec-right">
-          <div className="status-badge">
+          <div className="status-badge" title="Palm Guard Protection Area: Entire Canvas">
             <div className={`status-dot ${isPointerBlocked ? 'blocked' : isPalmTouching ? 'palm-active' : ''}`} />
             <span className="status-text">{pointerStatus}</span>
           </div>
         </div>
       </div>
 
-      {/* --- Canvas Drawing Area (Fixed in place, non-scrolling) --- */}
+      {/* --- Canvas Drawing Area (Whole Canvas is Palm-Rest Safe) --- */}
       <main className="canvas-wrapper" ref={canvasWrapperRef}>
         <canvas
           ref={canvasRef}
@@ -731,13 +748,19 @@ export default function App() {
           onPointerLeave={handlePointerUp}
         />
 
-        {/* --- Pull-Up Palm Rest Guard Drawer --- */}
-        {showPalmShield && (
+        {/* Whole-Screen Palm Guard Active Watermark/Badge */}
+        <div className="fullscreen-palm-indicator">
+          <CheckCircle2 size={13} color="#10b981" />
+          <span>Whole Canvas Protected • Rest Palm Anywhere</span>
+        </div>
+
+        {/* --- Optional Pull-Up Palm Rest Guard Drawer --- */}
+        {showPalmDrawer && (
           <div
             className={`palm-rest-drawer ${isPalmTouching ? 'touching' : ''} ${isDrawerDragging ? 'dragging' : ''}`}
-            style={{ height: `${palmShieldHeight}px` }}
+            style={{ height: `${palmDrawerHeight}px` }}
           >
-            {/* Top Drawer Pull Tab & Grip Handle (Interactive Drag / Pull Zone) */}
+            {/* Top Drawer Pull Tab & Grip Handle */}
             <div
               className="drawer-pull-tab"
               onPointerDown={handleDrawerDragStart}
@@ -749,21 +772,21 @@ export default function App() {
               <div className="drawer-handle-bar">
                 <GripHorizontal size={18} className="grip-icon" />
                 <span className="drawer-handle-title">
-                  ✋ PALM REST DRAWER ({palmShieldHeight}px)
+                  ✋ PALM REST DRAWER ({palmDrawerHeight}px)
                 </span>
                 <span className="drawer-drag-hint">↕ Pull to Expand</span>
               </div>
             </div>
 
-            {/* Drawer Controls Bar (Preset buttons & Expand/Shrink actions) */}
+            {/* Drawer Controls Bar */}
             <div className="drawer-header-toolbar" onPointerDown={(e) => e.stopPropagation()}>
               <div className="drawer-preset-group">
                 <span className="drawer-control-label">Presets:</span>
                 {DRAWER_PRESETS.map((preset) => (
                   <button
                     key={preset.label}
-                    className={`drawer-preset-btn ${Math.abs(palmShieldHeight - preset.height) < 25 ? 'active' : ''}`}
-                    onClick={() => setPalmShieldHeight(preset.height)}
+                    className={`drawer-preset-btn ${Math.abs(palmDrawerHeight - preset.height) < 25 ? 'active' : ''}`}
+                    onClick={() => setPalmDrawerHeight(preset.height)}
                   >
                     {preset.label} ({preset.height}px)
                   </button>
@@ -778,8 +801,8 @@ export default function App() {
                   min="80"
                   max="540"
                   step="10"
-                  value={palmShieldHeight}
-                  onChange={(e) => setPalmShieldHeight(Number(e.target.value))}
+                  value={palmDrawerHeight}
+                  onChange={(e) => setPalmDrawerHeight(Number(e.target.value))}
                   className="drawer-height-slider"
                   title="Adjust Drawer Height"
                 />
